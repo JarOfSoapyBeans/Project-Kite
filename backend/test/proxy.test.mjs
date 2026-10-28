@@ -110,6 +110,10 @@ before(async () => {
       res.writeHead(200, { "content-type": "text/html; charset=iso-8859-1" });
       return res.end(Buffer.from("<p>caf\xe9</p>", "latin1"));
     }
+    if (u.pathname === "/redir-bad") {
+      res.writeHead(302, { location: "http://127.0.0.1:6379/" });
+      return res.end();
+    }
     if (u.pathname === "/redir") {
       res.writeHead(302, { location: "/page.html" });
       return res.end();
@@ -176,6 +180,23 @@ test("redirects are rewritten to proxy URLs", async () => {
   assert.equal(r.status, 302);
   assert.equal(r.headers.get("location"), P(siteUrl + "/page.html"));
   assert.equal(r.headers.get("referrer-policy"), null, "redirects must not change the referrer policy");
+});
+
+test("a tab's first load follows redirects on the server", async () => {
+  const r = await get(proxyUrl, P(siteUrl + "/redir"), { headers: { referer: "https://kite.example/" } });
+  assert.equal(r.status, 200);
+  const body = await r.text();
+  assert.ok(body.includes(`href="${P(siteUrl + "/s.css")}"`), "links resolved against the final URL");
+  assert.ok(body.includes(JSON.stringify(siteUrl + "/page.html")), "Kite UI is told the final URL");
+});
+
+test("followed redirects still go through the SSRF checks", async () => {
+  const s = http.createServer((req, res) => handleProxy(req, res, { allowPrivate: true, allowedPorts: [Number(new URL(siteUrl).port)] }));
+  const u = await listen(s);
+  const r = await get(u, P(siteUrl + "/redir-bad"));
+  s.close();
+  assert.equal(r.status, 403);
+  assert.ok((await r.text()).includes("Port 6379"));
 });
 
 test("GET form query is applied; cookies are not forwarded", async () => {

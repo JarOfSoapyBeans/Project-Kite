@@ -1,6 +1,6 @@
 FROM node:22-alpine
 WORKDIR /app
-COPY package.json server.js proxy.js ./
+COPY package.json server.js proxy.js websocket.js ./
 ENV PORT=8080
 EXPOSE 8080
 USER node

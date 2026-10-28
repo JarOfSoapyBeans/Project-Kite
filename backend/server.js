@@ -1,7 +1,10 @@
-// Kite backend. Serves Kite's own proxy at /proxy/ (Stage 1). No dependencies.
+// Kite backend. No dependencies.
+//   /proxy/<url>  pages, images, scripts... (Stages 1-2)
+//   /ws/<url>     WebSocket relay (Stage 3)
 
 import http from "node:http";
 import { handleProxy, PREFIX, decodeUrl, resolveViaReferer, toProxyUrl } from "./proxy.js";
+import { handleWebSocket, WS_PREFIX } from "./websocket.js";
 
 const PORT = Number(process.env.PORT || 8080);
 
@@ -14,6 +17,7 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
   .filter(Boolean);
 
 const MAX_ACTIVE_PER_IP = Number(process.env.MAX_ACTIVE_PER_IP || 100);
+const MAX_WEBSOCKETS_PER_IP = Number(process.env.MAX_WEBSOCKETS_PER_IP || 30);
 const TRUST_CF = process.env.TRUST_CF === "1"; // behind a Cloudflare Tunnel
 
 const proxyOptions = { allowedOrigins: ALLOWED_ORIGINS };
@@ -35,8 +39,24 @@ function originAllowed(req) {
   if (req.headers["sec-fetch-site"] === "same-origin") return true;
   try {
     const ref = new URL(req.headers.referer);
-    const hosts = [req.headers.host, String(req.headers["x-forwarded-host"] || "").split(",")[0].trim()];
-    return hosts.includes(ref.host) || ALLOWED_ORIGINS.includes(ref.origin);
+    return ownHosts(req).includes(ref.host) || ALLOWED_ORIGINS.includes(ref.origin);
+  } catch {
+    return false;
+  }
+}
+
+// The names this server is reached by (directly, or through a forwarding proxy).
+function ownHosts(req) {
+  return [req.headers.host, String(req.headers["x-forwarded-host"] || "").split(",")[0].trim()];
+}
+
+// WebSockets are opened by pages Kite is showing, which live on this server's origin.
+function webSocketAllowed(req) {
+  if (!ALLOWED_ORIGINS.length) return true;
+  if (req.headers["sec-fetch-site"] === "same-origin") return true; // set by the browser itself
+  try {
+    const origin = new URL(req.headers.origin);
+    return ownHosts(req).includes(origin.host) || ALLOWED_ORIGINS.includes(origin.origin);
   } catch {
     return false;
   }
@@ -103,7 +123,38 @@ const server = http.createServer((req, res) => {
   res.end(pathname === "/" ? "Kite backend is running." : "Not found");
 });
 
+// ---------- WebSockets (Stage 3) ----------
+
+const activeSockets = new Map();
+
+server.on("upgrade", (req, socket, head) => {
+  const { pathname } = new URL(req.url, "http://localhost");
+  const reject = (status, text, why) => {
+    console.log(`[kite ws ${status}] ${why}`);
+    socket.write(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+    socket.destroy();
+  };
+  if (!pathname.startsWith(WS_PREFIX)) return reject(404, "Not Found", req.url.slice(0, 80));
+  if (!webSocketAllowed(req)) return reject(403, "Forbidden", `not from Kite (origin=${req.headers.origin || "(none)"})`);
+
+  const ip = clientIp(req);
+  const count = activeSockets.get(ip) || 0;
+  if (count >= MAX_WEBSOCKETS_PER_IP) return reject(429, "Too Many Requests", `too many WebSockets from ${ip}`);
+  activeSockets.set(ip, count + 1);
+  socket.on("close", () => {
+    const left = (activeSockets.get(ip) || 1) - 1;
+    if (left <= 0) activeSockets.delete(ip);
+    else activeSockets.set(ip, left);
+  });
+
+  handleWebSocket(req, socket, head, {
+    ...proxyOptions,
+    log: (status, url, detail, source = "kite") =>
+      console.log(`[${source} ws ${status}] ${String(url).slice(0, 120)}${detail ? `  (${detail})` : ""}`),
+  });
+});
+
 server.listen(PORT, () => {
-  console.log(`Kite backend on :${PORT}  (proxy: ${PREFIX}, health: /health)`);
+  console.log(`Kite backend on :${PORT}  (pages: ${PREFIX}, websockets: ${WS_PREFIX}, health: /health)`);
   console.log(`Allowed origins: ${ALLOWED_ORIGINS.length ? ALLOWED_ORIGINS.join(", ") : "ANY"}`);
 });

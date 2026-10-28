@@ -122,7 +122,7 @@ function blocked(message) {
   return Object.assign(new Error(message), { code: "KITE_BLOCKED" });
 }
 
-function checkTarget(u, o) {
+export function checkTarget(u, o) {
   if (u.protocol !== "http:" && u.protocol !== "https:") throw blocked("Only http and https are allowed.");
   const port = Number(u.port || (u.protocol === "https:" ? 443 : 80));
   if (o.allowedPorts && !o.allowedPorts.includes(port)) throw blocked(`Port ${port} is not allowed.`);
@@ -134,7 +134,7 @@ function checkTarget(u, o) {
 
 // Checks the address DNS actually returned, at connect time, so a public
 // hostname that resolves to a private IP is still blocked.
-function guardedLookup(allowPrivate) {
+export function guardedLookup(allowPrivate) {
   return (hostname, options, callback) => {
     dns.lookup(hostname, options, (err, address, family) => {
       if (err) return callback(err);
@@ -288,7 +288,7 @@ export function rewriteHtml(html, pageUrl, { allowedOrigins = [] } = {}) {
 // Runs inside every proxied page, before the page's own scripts (Stage 2).
 // The page's JavaScript builds URLs while it runs, which the server never sees.
 // This script catches those and sends them through Kite too:
-//  - fetch, XMLHttpRequest, sendBeacon, EventSource, Worker
+//  - fetch, XMLHttpRequest, sendBeacon, EventSource, Worker, WebSocket (Stage 3)
 //  - element URLs set from JavaScript (img.src, a.href, setAttribute...) and
 //    elements inserted as HTML (innerHTML)
 //  - navigation: link clicks, forms, location.href = ..., window.open
@@ -432,6 +432,32 @@ function kiteClient(realUrl, origins) {
     });
     window[name] = Wrapped;
   });
+
+  // WebSockets (Stage 3) go through Kite's relay at /ws/<real url>/<page origin>.
+  var OrigWebSocket = window.WebSocket;
+  if (OrigWebSocket) {
+    var wsRelayUrl = function (url) {
+      var s = String(url);
+      var u = new URL(s, current);
+      // Built from location.host/origin? That really means the real site.
+      if (u.host === location.host && u.pathname.indexOf("/ws/") !== 0) u = new URL(u.pathname + u.search, current);
+      else if (u.host === location.host) return s; // already a Kite relay URL
+      if (u.protocol === "http:") u.protocol = "ws:";
+      else if (u.protocol === "https:") u.protocol = "wss:";
+      if (u.protocol !== "ws:" && u.protocol !== "wss:") return s;
+      u.hash = "";
+      return (location.protocol === "https:" ? "wss://" : "ws://") + location.host +
+        "/ws/" + encode(u.href) + "/" + encode(new URL(current).origin);
+    };
+    var KiteWebSocket = function (url, protocols) {
+      var relay = url;
+      try { relay = wsRelayUrl(url); } catch (e) {}
+      return protocols === undefined ? new OrigWebSocket(relay) : new OrigWebSocket(relay, protocols);
+    };
+    KiteWebSocket.prototype = OrigWebSocket.prototype;
+    ["CONNECTING", "OPEN", "CLOSING", "CLOSED"].forEach(function (k) { KiteWebSocket[k] = OrigWebSocket[k]; });
+    window.WebSocket = KiteWebSocket;
+  }
 
   // A site's own service worker would be installed on Kite's address and take over
   // every Kite request (YouTube tries this), so refuse politely.

@@ -74,21 +74,23 @@ You can also change the backend at any time with the gear button in Kite's toolb
    point back through `/proxy/`.
 3. It removes headers that would stop the page loading in a tab (CSP,
    X-Frame-Options...) and never forwards your cookies.
-4. A tiny injected script tells the Kite UI the page's real address and title, and
-   lets the back, forward and reload buttons control the tab.
-5. URLs that page JavaScript builds itself are caught using the Referer header and
-   redirected through the proxy.
+4. A script injected into every page (`kiteClient` in `proxy.js`) catches the URLs the
+   page's own JavaScript builds (`fetch`, XHR, `img.src`, `location.href = ...`,
+   `window.open`...) and sends them through Kite too. It also tells the Kite UI the
+   page's real address and title.
+5. Anything that still slips past is caught on the server using the Referer header.
 
 ## Roadmap
 
 - [x] **Stage 1:** server-side fetch and HTML/CSS rewriting
-- [ ] **Stage 2:** injected script that intercepts `fetch`, XHR, forms and history
-- [ ] **Stage 3:** WebSocket (`wss://`) relay
+- [x] **Stage 2:** injected script that intercepts `fetch`, XHR, `sendBeacon`, workers,
+  element URLs, links, forms, `location`, `window.open` and history
+- [x] **Stage 3:** WebSocket (`wss://`) relay at `/ws/` (`backend/websocket.js`)
 - [ ] **Stage 4:** per-site cookie jar and a service worker
 - [ ] **Stage 5:** JavaScript rewriting (needed for Google, YouTube, logins)
 
-Right now, static and server-rendered sites work best. Sites that need logins or are
-built mostly with JavaScript will be partly broken until later stages.
+Right now, most ordinary sites work, including live updates over WebSockets. Logins
+(cookies) and the very hardest sites (Google, YouTube) need the later stages.
 
 ## Security
 
