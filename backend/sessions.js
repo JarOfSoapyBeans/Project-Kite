@@ -37,6 +37,14 @@ export class Sessions {
     if (file) this.#load();
   }
 
+  // True if the request carries a valid Kite session. Sessions are only created for
+  // requests that passed the backend's checks, and browsers keep this cookie
+  // separate per top-level site (Partitioned), so another site can't borrow it.
+  has(req) {
+    const id = readSessionId(req);
+    return Boolean(id && this.map.has(id));
+  }
+
   // The jar for this request's session. Creates a session (and sets its cookie on
   // `res`) when there is none and `res` is given.
   jarFor(req, res = null) {

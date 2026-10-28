@@ -214,3 +214,22 @@ test("document.cookie writes: only for the page's own site, never HttpOnly", asy
   assert.deepEqual(await cleared.json(), { sites: {} });
   s.close();
 });
+
+// ---------- the backend's gate ----------
+
+test("a Kite session lets you in even when the browser sends no Referer", async () => {
+  const { createKiteServer } = await import("../app.js");
+  const { server } = createKiteServer({ allowedOrigins: ["https://kite.example"], allowPrivate: true, allowedPorts: null, log: () => {} });
+  const u = await listen(server);
+  const page = u + P(siteUrl + "/x");
+  const strangers = await fetch(page, { redirect: "manual" });
+  assert.equal(strangers.status, 403, "no Referer and no session: refused");
+  const first = await fetch(page, { headers: { referer: "https://kite.example/" } });
+  assert.equal(first.status, 200, "first load from the Kite UI");
+  const sid = first.headers.get("set-cookie").split(";")[0];
+  const later = await fetch(page, { headers: { cookie: sid } });
+  assert.equal(later.status, 200, "same person, no Referer: allowed");
+  const forged = await fetch(page, { headers: { cookie: "kite_sid=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" } });
+  assert.equal(forged.status, 403, "made-up session ids don't count");
+  server.close();
+});

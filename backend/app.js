@@ -47,6 +47,9 @@ export function createKiteServer(config = {}) {
   // tab) or from a page already being proxied by this server.
   function originAllowed(req) {
     if (!allowedOrigins.length) return true;
+    // You already have a Kite session (see sessions.js). Browsers sometimes drop
+    // the Referer (some reloads, back/forward), so this is checked first.
+    if (sessions.has(req)) return true;
     // The browser sets Sec-Fetch-Site itself (pages can't fake it). "same-origin"
     // means a page Kite is already showing made this request, even if that page
     // asked the browser to send no Referer.
@@ -62,6 +65,7 @@ export function createKiteServer(config = {}) {
   // WebSockets are opened by pages Kite is showing, which live on this server's origin.
   function webSocketAllowed(req) {
     if (!allowedOrigins.length) return true;
+    if (sessions.has(req)) return true; // you already have a Kite session
     if (req.headers["sec-fetch-site"] === "same-origin") return true; // set by the browser itself
     try {
       const origin = new URL(req.headers.origin);
@@ -110,7 +114,8 @@ export function createKiteServer(config = {}) {
     if (!originAllowed(req)) {
       log(
         `[kite 403: not from Kite] ${describe(req.url)}  referer=${req.headers.referer || "(none)"}` +
-          ` sec-fetch-site=${req.headers["sec-fetch-site"] || "(none)"}`
+          ` sec-fetch-site=${req.headers["sec-fetch-site"] || "(none)"}` +
+          ` kite-session=${/(?:^|;\s*)kite_sid=/.test(req.headers.cookie || "") ? "unknown" : "none"}`
       );
       res.writeHead(403, { "content-type": "text/plain", "x-kite-source": "kite" });
       return res.end("Forbidden: open this through the Kite frontend (see ALLOWED_ORIGINS).");
