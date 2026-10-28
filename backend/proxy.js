@@ -13,6 +13,7 @@ import { promisify } from "node:util";
 import { requestContext } from "./cookies.js";
 
 export const PREFIX = "/proxy/";
+export const TICKET_PARAM = "__kite_t"; // the Kite UI's tab ticket; never sent to sites
 const MAX_BODY = 10 * 1024 * 1024; // largest HTML/CSS we will rewrite, and largest upload
 const TIMEOUT_MS = 30_000;
 
@@ -305,6 +306,13 @@ function kiteClient(realUrl, origins, initialCookies) {
   var current = realUrl;
   var isTab = window.parent !== window && window.parent === window.top;
   var origSetAttribute = Element.prototype.setAttribute;
+
+  // The Kite UI's tab ticket (?__kite_t=...) is only for the backend: take it out
+  // of the address before the page's own scripts can see it.
+  if (/[?&]__kite_t=/.test(location.search)) {
+    var cleaned = location.search.replace(/([?&])__kite_t=[^&]*&?/, "$1").replace(/[?&]$/, "");
+    history.replaceState(history.state, "", location.pathname + cleaned + location.hash);
+  }
 
   // ---------- URL helpers ----------
 
@@ -863,10 +871,15 @@ export async function handleProxy(req, res, options = {}) {
       res.writeHead(307, { location: toProxyUrl(abs), "x-kite-source": "kite" });
       return res.end();
     }
-    if (reqUrl.search) {
+    let search = reqUrl.search;
+    if (reqUrl.searchParams.has(TICKET_PARAM)) {
+      reqUrl.searchParams.delete(TICKET_PARAM);
+      search = reqUrl.searchParams.toString() ? "?" + reqUrl.searchParams.toString() : "";
+    }
+    if (search) {
       // GET forms replace the query string of their action URL.
       const t = new URL(target);
-      t.search = reqUrl.search;
+      t.search = search;
       target = t.href;
     }
 

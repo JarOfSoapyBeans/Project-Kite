@@ -139,6 +139,8 @@ before(async () => {
       return res.end("{}");
     }
     res.writeHead(200, { "content-type": "text/plain" });
+    if (req.url.includes("__kite_t")) return res.end("LEAKED " + req.url);
+    if (u.pathname === "/x" && u.search && u.search !== "?q=1") return res.end("WRONG QUERY " + u.search);
     res.end("cookie=" + (req.headers.cookie || ""));
   });
   siteUrl = await listen(site);
@@ -231,5 +233,24 @@ test("a Kite session lets you in even when the browser sends no Referer", async 
   assert.equal(later.status, 200, "same person, no Referer: allowed");
   const forged = await fetch(page, { headers: { cookie: "kite_sid=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" } });
   assert.equal(forged.status, 403, "made-up session ids don't count");
+  server.close();
+});
+
+test("a tab ticket from the Kite UI lets a page in with no Referer and no cookies", async () => {
+  const { createKiteServer } = await import("../app.js");
+  const { server } = createKiteServer({ allowedOrigins: ["https://kite.example"], allowPrivate: true, allowedPorts: null, log: () => {} });
+  const u = await listen(server);
+  const notUi = await fetch(u + "/__kite/ticket", { headers: { origin: u } });
+  assert.equal(notUi.status, 403, "pages inside Kite can't get tickets");
+  const r = await fetch(u + "/__kite/ticket", { headers: { origin: "https://kite.example" } });
+  assert.equal(r.headers.get("access-control-allow-origin"), "https://kite.example");
+  const { ticket } = await r.json();
+  assert.match(ticket, /^[\w-]{32}$/);
+  const page = (t) => fetch(u + P(siteUrl + "/x?q=1") + (t ? "?__kite_t=" + t : ""));
+  const ok = await page(ticket);
+  assert.equal(ok.status, 200);
+  assert.equal(await ok.text(), "cookie=", "ticket never reaches the site, and the page's own query is kept");
+  assert.equal((await page("not-a-real-ticket-at-all-0000000")).status, 403);
+  assert.equal((await page(null)).status, 403);
   server.close();
 });

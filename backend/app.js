@@ -5,7 +5,7 @@
 //   /__kite/...   Kite's own endpoints: cookies (Stage 4)
 
 import http from "node:http";
-import { handleProxy, PREFIX, decodeUrl, resolveViaReferer, toProxyUrl } from "./proxy.js";
+import { handleProxy, PREFIX, TICKET_PARAM, decodeUrl, resolveViaReferer, toProxyUrl } from "./proxy.js";
 import { handleWebSocket, WS_PREFIX } from "./websocket.js";
 import { Sessions } from "./sessions.js";
 import { siteOf } from "./cookies.js";
@@ -47,8 +47,11 @@ export function createKiteServer(config = {}) {
   // tab) or from a page already being proxied by this server.
   function originAllowed(req) {
     if (!allowedOrigins.length) return true;
-    // You already have a Kite session (see sessions.js). Browsers sometimes drop
-    // the Referer (some reloads, back/forward), so this is checked first.
+    // A tab's first load carries a ticket from the Kite UI (see sessions.js), and
+    // later requests may carry your Kite session. Browsers sometimes drop the
+    // Referer (privacy settings, some reloads, back/forward), so these come first.
+    const ticket = new URL(req.url, "http://localhost").searchParams.get(TICKET_PARAM);
+    if (ticket && sessions.checkTicket(ticket)) return true;
     if (sessions.has(req)) return true;
     // The browser sets Sec-Fetch-Site itself (pages can't fake it). "same-origin"
     // means a page Kite is already showing made this request, even if that page
@@ -115,6 +118,8 @@ export function createKiteServer(config = {}) {
       log(
         `[kite 403: not from Kite] ${describe(req.url)}  referer=${req.headers.referer || "(none)"}` +
           ` sec-fetch-site=${req.headers["sec-fetch-site"] || "(none)"}` +
+          ` sec-fetch-dest=${req.headers["sec-fetch-dest"] || "(none)"}` +
+          ` ticket=${new URL(req.url, "http://localhost").searchParams.has(TICKET_PARAM) ? "invalid" : "none"}` +
           ` kite-session=${/(?:^|;\s*)kite_sid=/.test(req.headers.cookie || "") ? "unknown" : "none"}`
       );
       res.writeHead(403, { "content-type": "text/plain", "x-kite-source": "kite" });

@@ -47,11 +47,27 @@ function base64url(text) {
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-function proxied(url) {
+function proxied(url, ticket) {
   const u = new URL(url);
   const hash = u.hash;
   u.hash = "";
-  return backend() + "/proxy/" + base64url(u.href) + hash;
+  return backend() + "/proxy/" + base64url(u.href) + (ticket ? "?__kite_t=" + encodeURIComponent(ticket) : "") + hash;
+}
+
+// A pass from the backend proving tab loads come from this Kite UI. Needed when
+// the browser sends no Referer and no cookies (privacy settings, some browsers).
+let ticket = null;
+let ticketTime = 0;
+async function getTicket() {
+  if (ticket && Date.now() - ticketTime < 60 * 60 * 1000) return ticket;
+  try {
+    const r = await fetch(backend() + "/__kite/ticket", { credentials: "include", signal: AbortSignal.timeout(6000) });
+    if (r.ok) {
+      ticket = (await r.json()).ticket;
+      ticketTime = Date.now();
+    }
+  } catch {}
+  return ticket;
 }
 
 async function checkBackend() {
@@ -172,7 +188,7 @@ async function navigate(input, tab = activeTab) {
   tab.title = "Loading\u2026";
   renderTab(tab);
   if (tab === activeTab) updateAddress();
-  tab.iframe.src = proxied(url);
+  tab.iframe.src = proxied(url, await getTicket());
 }
 
 // Same-origin frames (new-tab page) can be driven directly; proxied pages
@@ -208,6 +224,7 @@ document.getElementById("settings").addEventListener("click", () => {
     else localStorage.removeItem("backendUrl");
   } catch {}
   backendOk = false;
+  ticket = null;
   checkBackend();
 });
 

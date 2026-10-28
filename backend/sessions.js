@@ -12,6 +12,8 @@ import { CookieJar } from "./cookies.js";
 
 export const SESSION_COOKIE = "kite_sid";
 const IDLE_MS = 30 * 24 * 3600 * 1000; // forget sessions unused for 30 days
+const TICKET_MS = 6 * 3600 * 1000; // tab tickets work for 6 hours
+const MAX_TICKETS = 10000;
 const MAX_SESSIONS = 1000;
 
 function readSessionId(req) {
@@ -33,8 +35,26 @@ export class Sessions {
   constructor({ file = null } = {}) {
     this.file = file;
     this.map = new Map(); // id -> { jar, lastUsed }
+    this.tickets = new Map(); // ticket -> expiry time
     this.saveTimer = null;
     if (file) this.#load();
+  }
+
+  // Tab tickets: the Kite UI asks for one (a request browsers always label with
+  // the UI's origin) and attaches it to a tab's first load, so that load is let in
+  // even when the browser sends neither a Referer nor the session cookie.
+  issueTicket() {
+    const now = Date.now();
+    for (const [t, exp] of this.tickets) if (exp <= now) this.tickets.delete(t);
+    while (this.tickets.size >= MAX_TICKETS) this.tickets.delete(this.tickets.keys().next().value);
+    const ticket = crypto.randomBytes(24).toString("base64url");
+    this.tickets.set(ticket, now + TICKET_MS);
+    return ticket;
+  }
+
+  checkTicket(ticket) {
+    const exp = ticket && this.tickets.get(ticket);
+    return Boolean(exp && exp > Date.now());
   }
 
   // True if the request carries a valid Kite session. Sessions are only created for

@@ -3,6 +3,7 @@
 //   POST /__kite/cookie            document.cookie writes from a proxied page
 //   GET  /__kite/cookies           which sites you have cookies for   (Kite UI only)
 //   POST /__kite/cookies/clear     forget cookies (all, or one site)  (Kite UI only)
+//   GET  /__kite/ticket            a pass for loading pages in tabs   (Kite UI only)
 //
 // Proxied pages all live on the backend's address, so the cookie manager only
 // answers cross-origin requests from your Kite frontend (ALLOWED_ORIGINS), never
@@ -50,7 +51,7 @@ export async function handleKiteApi(req, res, { sessions, allowedOrigins = [] })
   }
 
   // The cookie manager: only for the Kite UI.
-  if (pathname === "/__kite/cookies" || pathname === "/__kite/cookies/clear") {
+  if (pathname === "/__kite/cookies" || pathname === "/__kite/cookies/clear" || pathname === "/__kite/ticket") {
     const origin = req.headers.origin;
     let fromUi = false;
     try {
@@ -60,6 +61,9 @@ export async function handleKiteApi(req, res, { sessions, allowedOrigins = [] })
     if (req.method === "OPTIONS") return send(res, fromUi ? 204 : 403, "", { ...cors, "access-control-allow-methods": "GET, POST" }), true;
     if (!fromUi) return send(res, 403, "Only the Kite UI can manage cookies."), true;
     const jar = sessions.jarFor(req, res);
+    if (pathname === "/__kite/ticket") {
+      return send(res, 200, JSON.stringify({ ticket: sessions.issueTicket() }), { ...cors, "content-type": "application/json" }), true;
+    }
     if (pathname === "/__kite/cookies/clear") {
       if (req.method !== "POST") return send(res, 405, "", cors), true;
       const site = new URLSearchParams((await readBody(req, 1024)) || "").get("site");
