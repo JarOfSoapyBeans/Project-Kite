@@ -1,0 +1,9 @@
+{
+  "name": "Kite",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm",
+  "forwardPorts": [3000, 8080],
+  "portsAttributes": {
+    "3000": { "label": "Kite frontend", "onAutoForward": "notify" },
+    "8080": { "label": "Kite backend", "onAutoForward": "silent" }
+  }
+}

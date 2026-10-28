@@ -1,0 +1,11 @@
+{
+  "name": "kite-frontend",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Kite browser UI (static). Deployed on Vercel.",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/build.mjs && npx --yes serve public -l 3000"
+  }
+}

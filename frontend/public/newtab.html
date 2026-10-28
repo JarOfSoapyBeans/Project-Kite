@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>New Tab</title>
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0; min-height: 100vh; display: grid; place-items: center;
+        background: #16181d; color: #e6e8ec;
+        font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      form { width: min(560px, 90vw); text-align: center; }
+      h1 { font-weight: 600; font-size: 2rem; margin: 0 0 1.25rem; }
+      input {
+        width: 100%; box-sizing: border-box; padding: 0.85rem 1.1rem;
+        border-radius: 999px; border: 1px solid #343a46; background: #1f232b;
+        color: inherit; font: inherit; outline: none;
+      }
+      input:focus { border-color: #6ea8ff; }
+    </style>
+  </head>
+  <body>
+    <form id="f">
+      <h1>Kite</h1>
+      <input id="q" autofocus autocomplete="off" placeholder="Search or enter address" />
+    </form>
+    <script>
+      document.getElementById("f").addEventListener("submit", (e) => {
+        e.preventDefault();
+        const value = document.getElementById("q").value;
+        if (window.parent && window.parent.browserNavigate) window.parent.browserNavigate(value);
+      });
+    </script>
+  </body>
+</html>

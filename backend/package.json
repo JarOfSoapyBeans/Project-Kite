@@ -1,0 +1,15 @@
+{
+  "name": "kite-backend",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Kite backend: its own fetch-and-rewrite proxy (Stage 1). No dependencies.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
