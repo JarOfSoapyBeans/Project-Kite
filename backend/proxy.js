@@ -57,14 +57,24 @@ export function rewriteUrl(value, base) {
   }
 }
 
-// If a page asks for a path we did not rewrite (e.g. one built by JavaScript),
-// the Referer tells us which proxied page it came from, so resolve against it.
-export function resolveViaReferer(req, relative) {
+// The real URL of the proxied page that made this request (from its Referer), or null.
+export function sourcePage(req) {
   try {
     const ref = new URL(req.headers.referer);
     if (!ref.pathname.startsWith(PREFIX)) return null;
-    const base = decodeUrl(ref.pathname.slice(PREFIX.length).split("/")[0]);
-    return base ? new URL(relative, base).href : null;
+    const real = decodeUrl(ref.pathname.slice(PREFIX.length).split("/")[0]);
+    return real ? new URL(real) : null;
+  } catch {
+    return null;
+  }
+}
+
+// If a page asks for a path we did not rewrite (e.g. one built by JavaScript),
+// the Referer tells us which proxied page it came from, so resolve against it.
+export function resolveViaReferer(req, relative) {
+  const page = sourcePage(req);
+  try {
+    return page ? new URL(relative, page).href : null;
   } catch {
     return null;
   }
@@ -227,6 +237,8 @@ function rewriteTag(name, attrStr, state) {
   }
   const httpEquiv = tag === "meta" ? (get("http-equiv") || "").toLowerCase() : "";
   if (DROP_META.has(httpEquiv)) return "";
+  // <meta name="referrer"> would override Kite's referrer policy and break requests.
+  if (tag === "meta" && (get("name") || "").toLowerCase() === "referrer") return "";
 
   const out = [];
   for (const a of attrs) {
@@ -237,11 +249,12 @@ function rewriteTag(name, attrStr, state) {
     }
     const dv = decodeEntities(a.value);
     let nv = null; // new (decoded) value, or null to keep the original
-    if (n === "integrity" || n === "ping") continue;
+    if (n === "integrity" || n === "referrerpolicy") continue;
     if (n === "target" && /^_(blank|top|parent)$/i.test(dv.trim())) continue; // keep pages inside the tab
     if (URL_ATTRS.has(n) || (n === "data" && tag === "object")) nv = rewriteUrl(dv, state.base);
     else if (n === "srcset" || n === "imagesrcset") nv = rewriteSrcset(dv, state.base);
     else if (n === "style") nv = rewriteCss(dv, state.base);
+    else if (n === "ping") nv = dv.split(/\s+/).filter(Boolean).map((u) => rewriteUrl(u, state.base)).join(" ");
     else if (n === "content" && httpEquiv === "refresh") {
       nv = dv.replace(/(url\s*=\s*)(['"]?)([^'";]+)\2/i, (m, p, q, u) => p + q + rewriteUrl(u.trim(), state.base) + q);
     }
@@ -272,20 +285,96 @@ export function rewriteHtml(html, pageUrl, { allowedOrigins = [] } = {}) {
   return out.slice(0, at) + inject + out.slice(at);
 }
 
-// Runs inside every proxied page. Tells the Kite UI the real URL and title,
-// and lets the UI's back/forward/reload buttons control the tab.
+// Runs inside every proxied page, before the page's own scripts. It:
+//  - tells the Kite UI the real URL and title,
+//  - keeps history.pushState/replaceState URLs in /proxy/ form, so the page can't
+//    move itself off its Kite address (which would break its later requests),
+//  - lets the UI's back/forward/reload buttons control the tab.
 function kiteClient(realUrl, origins) {
   if (window.__kite) return;
   window.__kite = true;
+  var PREFIX = "/proxy/";
+  var current = realUrl;
   var parent = window.parent;
-  if (parent !== window && parent === window.top) {
-    var report = function () {
-      var msg = { kite: 1, type: "page", url: realUrl, title: document.title || "" };
-      if (!origins.length) return parent.postMessage(msg, "*");
-      for (var i = 0; i < origins.length; i++) {
-        try { parent.postMessage(msg, origins[i]); } catch (e) {}
+  var isTab = parent !== window && parent === window.top;
+
+  function encode(url) {
+    var bytes = new TextEncoder().encode(url);
+    var bin = "";
+    for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+  function decode(token) {
+    try {
+      var bin = atob(token.replace(/-/g, "+").replace(/_/g, "/"));
+      var bytes = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      var u = new URL(new TextDecoder().decode(bytes));
+      return u.protocol === "http:" || u.protocol === "https:" ? u : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  // Turn a URL the page passes to history.* into { real, path }.
+  function toProxy(url) {
+    var here = new URL(url, location.href);
+    if (here.origin === location.origin && here.pathname.indexOf(PREFIX) === 0) {
+      var d = decode(here.pathname.slice(PREFIX.length).split("/")[0]);
+      if (d) {
+        // Already a Kite URL (e.g. built from location.href).
+        if (here.search) d.search = here.search;
+        d.hash = here.hash;
+        return { real: d.href, path: here.pathname + here.search + here.hash };
       }
+    }
+    var absolute = /^[a-z][a-z0-9+.-]*:/i.test(url);
+    var real = here.origin === location.origin && absolute
+      ? new URL(here.pathname + here.search + here.hash, current) // built from location.origin
+      : new URL(url, current); // relative or a real-site URL
+    if (real.protocol !== "http:" && real.protocol !== "https:") return null;
+    var hash = real.hash;
+    real.hash = "";
+    return { real: real.href + hash, path: PREFIX + encode(real.href) + hash };
+  }
+
+  function report() {
+    if (!isTab) return;
+    var msg = { kite: 1, type: "page", url: current, title: document.title || "" };
+    if (!origins.length) return parent.postMessage(msg, "*");
+    for (var i = 0; i < origins.length; i++) {
+      try { parent.postMessage(msg, origins[i]); } catch (e) {}
+    }
+  }
+
+  ["pushState", "replaceState"].forEach(function (name) {
+    var original = history[name];
+    history[name] = function (state, title, url) {
+      if (url !== undefined && url !== null && url !== "") {
+        var p = null;
+        try { p = toProxy(String(url)); } catch (e) {}
+        if (p) {
+          current = p.real;
+          url = p.path;
+        }
+      }
+      var result = original.call(this, state, title, url);
+      report();
+      return result;
     };
+  });
+
+  function syncFromLocation() {
+    var d = decode(location.pathname.slice(PREFIX.length).split("/")[0]);
+    if (d) {
+      d.hash = location.hash;
+      current = d.href;
+    }
+    report();
+  }
+  window.addEventListener("popstate", syncFromLocation);
+  window.addEventListener("hashchange", syncFromLocation);
+
+  if (isTab) {
     report();
     document.addEventListener("DOMContentLoaded", report);
     window.addEventListener("load", report);
@@ -302,7 +391,31 @@ function kiteClient(realUrl, origins) {
 
 // ---------- fetching ----------
 
-const FORWARD_HEADERS = ["user-agent", "accept", "accept-language", "content-type", "range"];
+const FORWARD_HEADERS = [
+  "user-agent", "accept", "accept-language", "content-type", "range", "dnt",
+  "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform", "sec-fetch-mode", "sec-fetch-user",
+  "upgrade-insecure-requests", "x-requested-with",
+];
+
+// Make the request look to the site like it came straight from the real page:
+// the real page as Referer/Origin, and matching Sec-Fetch-* headers. Many sites
+// return 403 for images, stylesheets or pings that arrive without them.
+function upstreamHeaders(req, target) {
+  const h = { "accept-encoding": "gzip, deflate, br" };
+  for (const name of FORWARD_HEADERS) if (req.headers[name]) h[name] = req.headers[name];
+  const page = sourcePage(req);
+  const dest = req.headers["sec-fetch-dest"];
+  if (dest) h["sec-fetch-dest"] = dest === "iframe" && !page ? "document" : dest; // a Kite tab is a normal page to the site
+  if (page) {
+    const same = page.origin === target.origin;
+    h.referer = same ? page.href : page.origin + "/";
+    if (req.headers["sec-fetch-site"]) h["sec-fetch-site"] = same ? "same-origin" : "cross-site";
+    if (req.headers.origin) h.origin = page.origin;
+  } else if (req.headers["sec-fetch-site"]) {
+    h["sec-fetch-site"] = "none"; // typed into the address bar
+  }
+  return h;
+}
 
 const DROP_HEADERS = new Set([
   "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer",
@@ -319,14 +432,14 @@ function cleanHeaders(headers) {
     if (!DROP_HEADERS.has(k) && !k.startsWith("access-control-")) out[k] = v;
   }
   out["referrer-policy"] = "same-origin"; // keeps the Referer fallback working
+  out["x-kite-source"] = "upstream"; // this response came from the website
   return out;
 }
 
 function fetchUpstream(target, req, o) {
   return new Promise((resolve, reject) => {
     const u = new URL(target);
-    const headers = { "accept-encoding": "gzip, deflate, br" };
-    for (const h of FORWARD_HEADERS) if (req.headers[h]) headers[h] = req.headers[h];
+    const headers = upstreamHeaders(req, u);
     const up = (u.protocol === "https:" ? https : http).request(
       {
         protocol: u.protocol,
@@ -391,7 +504,8 @@ function decodeText(buf, contentType, isHtml) {
 
 function sendError(res, status, message) {
   if (res.headersSent) return res.destroy();
-  res.writeHead(status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+  res.setHeader("x-kite-source", "kite"); // visible to the server's error log
+  res.writeHead(status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-kite-source": "kite" });
   res.end(
     `<!doctype html><meta charset="utf-8"><title>Kite: ${status}</title>` +
       `<body style="font:16px/1.5 system-ui,sans-serif;padding:2rem;background:#16181d;color:#e6e8ec">` +
@@ -412,7 +526,7 @@ export async function handleProxy(req, res, options = {}) {
       // A relative URL resolved against /proxy/<token>; recover it from the Referer.
       const abs = resolveViaReferer(req, rest + reqUrl.search);
       if (!abs) return sendError(res, 400, "That isn't a valid Kite address.");
-      res.writeHead(307, { location: toProxyUrl(abs) });
+      res.writeHead(307, { location: toProxyUrl(abs), "x-kite-source": "kite" });
       return res.end();
     }
     if (reqUrl.search) {
@@ -422,10 +536,29 @@ export async function handleProxy(req, res, options = {}) {
       target = t.href;
     }
 
-    checkTarget(new URL(target), o);
-    const up = await fetchUpstream(target, req, o);
+    // A tab's first load comes from the Kite UI, on another origin. If the site
+    // redirects (youtube.com -> www.youtube.com), browsers may drop the Referer on
+    // the next hop and the backend would refuse it, so follow those redirects here.
+    const followRedirects = !sourcePage(req) && (req.method === "GET" || req.method === "HEAD");
+    let up;
+    for (let hops = 0; ; hops++) {
+      checkTarget(new URL(target), o); // every hop goes through the SSRF checks
+      up = await fetchUpstream(target, req, o);
+      const loc = up.headers.location;
+      if (!followRedirects || hops >= 10 || up.statusCode < 300 || up.statusCode >= 400 || !loc) break;
+      let next;
+      try {
+        next = new URL(loc, target);
+      } catch {
+        break;
+      }
+      if (next.protocol !== "http:" && next.protocol !== "https:") break;
+      up.resume();
+      target = next.href;
+    }
     const status = up.statusCode;
     const headers = cleanHeaders(up.headers);
+    res.setHeader("x-kite-source", "upstream"); // visible to the server's error log
 
     if (status >= 300 && status < 400 && up.headers.location) {
       up.resume();
@@ -440,6 +573,9 @@ export async function handleProxy(req, res, options = {}) {
       }
       headers.location = toProxyUrl(next.href);
       delete headers["content-length"];
+      // Browsers apply a redirect's Referrer-Policy to the next request. "same-origin"
+      // here would strip the Referer the backend uses to allow the first page load.
+      delete headers["referrer-policy"];
       res.writeHead(status, headers);
       return res.end();
     }

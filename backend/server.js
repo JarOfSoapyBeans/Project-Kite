@@ -1,7 +1,7 @@
 // Kite backend. Serves Kite's own proxy at /proxy/ (Stage 1). No dependencies.
 
 import http from "node:http";
-import { handleProxy, PREFIX, resolveViaReferer, toProxyUrl } from "./proxy.js";
+import { handleProxy, PREFIX, decodeUrl, resolveViaReferer, toProxyUrl } from "./proxy.js";
 
 const PORT = Number(process.env.PORT || 8080);
 
@@ -29,12 +29,24 @@ const clientIp = (req) => (TRUST_CF && req.headers["cf-connecting-ip"]) || req.s
 // tab) or from a page already being proxied by this server.
 function originAllowed(req) {
   if (!ALLOWED_ORIGINS.length) return true;
+  // The browser sets Sec-Fetch-Site itself (pages can't fake it). "same-origin"
+  // means a page Kite is already showing made this request, even if that page
+  // asked the browser to send no Referer.
+  if (req.headers["sec-fetch-site"] === "same-origin") return true;
   try {
     const ref = new URL(req.headers.referer);
-    return ref.host === req.headers.host || ALLOWED_ORIGINS.includes(ref.origin);
+    const hosts = [req.headers.host, String(req.headers["x-forwarded-host"] || "").split(",")[0].trim()];
+    return hosts.includes(ref.host) || ALLOWED_ORIGINS.includes(ref.origin);
   } catch {
     return false;
   }
+}
+
+// Short, readable description of a request for the log.
+function describe(url) {
+  const { pathname } = new URL(url, "http://localhost");
+  const real = pathname.startsWith(PREFIX) && decodeUrl(pathname.slice(PREFIX.length).split("/")[0]);
+  return (real || url).slice(0, 120);
 }
 
 const active = new Map();
@@ -48,8 +60,11 @@ const server = http.createServer((req, res) => {
   }
 
   if (!originAllowed(req)) {
-    console.log(`[reject] 403 referer=${req.headers.referer || "(none)"} path=${req.url.slice(0, 80)}`);
-    res.writeHead(403, { "content-type": "text/plain" });
+    console.log(
+      `[kite 403: not from Kite] ${describe(req.url)}  referer=${req.headers.referer || "(none)"}` +
+        ` sec-fetch-site=${req.headers["sec-fetch-site"] || "(none)"}`
+    );
+    res.writeHead(403, { "content-type": "text/plain", "x-kite-source": "kite" });
     return res.end("Forbidden: open this through the Kite frontend (see ALLOWED_ORIGINS).");
   }
 
@@ -66,6 +81,11 @@ const server = http.createServer((req, res) => {
     else active.set(ip, left);
   });
 
+  // Log every error, and whether Kite or the website produced it.
+  res.on("finish", () => {
+    if (res.statusCode >= 400) console.log(`[${res.getHeader("x-kite-source") || "kite"} ${res.statusCode}] ${describe(req.url)}`);
+  });
+
   if (pathname.startsWith(PREFIX)) return handleProxy(req, res, proxyOptions);
 
   // A page asked for a root-relative URL we didn't rewrite (e.g. "/logo.png"
@@ -76,7 +96,8 @@ const server = http.createServer((req, res) => {
     return res.end();
   }
 
-  res.writeHead(pathname === "/" ? 200 : 404, { "content-type": "text/plain" });
+  // No proxied page to resolve this against (e.g. DevTools fetching a source map).
+  res.writeHead(pathname === "/" ? 200 : 404, { "content-type": "text/plain", "x-kite-source": "kite" });
   res.end(pathname === "/" ? "Kite backend is running." : "Not found");
 });
 

@@ -2,7 +2,7 @@
 // backend's /proxy/<encoded-url>. Proxied pages report their real URL and title
 // back with postMessage.
 
-const SEARCH_URL = "https://duckduckgo.com/html/?q=";
+const SEARCH_URL = "https://www.bing.com/search?q=";
 const NEW_TAB = "/newtab.html";
 
 const tabsEl = document.getElementById("tabs");
@@ -88,6 +88,9 @@ function createTab(input) {
 
   tab.iframe = document.createElement("iframe");
   tab.iframe.setAttribute("allow", "fullscreen");
+  // Codespaces (and some hosts) send "Referrer-Policy: same-origin", which would hide
+  // where the request came from. The backend needs our origin to allow the request.
+  tab.iframe.referrerPolicy = "origin";
   tab.iframe.addEventListener("load", () => {
     // Only same-origin pages (our new-tab page) are readable here.
     try {

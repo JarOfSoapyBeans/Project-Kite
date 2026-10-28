@@ -172,9 +172,10 @@ test("gzip and non-UTF-8 pages are decoded", async () => {
 });
 
 test("redirects are rewritten to proxy URLs", async () => {
-  const r = await get(proxyUrl, P(siteUrl + "/redir"));
+  const r = await get(proxyUrl, P(siteUrl + "/redir"), { headers: { referer: proxyUrl + P(siteUrl + "/") } });
   assert.equal(r.status, 302);
   assert.equal(r.headers.get("location"), P(siteUrl + "/page.html"));
+  assert.equal(r.headers.get("referrer-policy"), null, "redirects must not change the referrer policy");
 });
 
 test("GET form query is applied; cookies are not forwarded", async () => {
