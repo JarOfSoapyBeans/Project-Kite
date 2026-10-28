@@ -14,7 +14,9 @@ echo "Frontend: ${FRONT_URL}"
 echo "Backend:  ${BACK_URL}"
 
 # Backend: only accept requests that come from this Codespace's frontend.
-(cd backend && ALLOWED_ORIGINS="${FRONT_URL}" PORT=8080 node server.js) &
+# Site cookies (your logins) are kept in .kite-cookies.json so they survive restarts
+# (the file is git-ignored; delete it to sign out of everything).
+(cd backend && ALLOWED_ORIGINS="${FRONT_URL}" PORT=8080 COOKIE_FILE="../.kite-cookies.json" node server.js) &
 BACKEND_PID=$!
 trap 'kill ${BACKEND_PID} 2>/dev/null || true' EXIT
 

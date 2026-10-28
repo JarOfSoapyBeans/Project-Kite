@@ -74,11 +74,13 @@ You can also change the backend at any time with the gear button in Kite's toolb
    point back through `/proxy/`.
 3. It removes headers that would stop the page loading in a tab (CSP,
    X-Frame-Options...) and never forwards your cookies.
-4. A script injected into every page (`kiteClient` in `proxy.js`) catches the URLs the
+4. The backend keeps each person's site cookies (Stage 4) and sends them with requests,
+   following browser rules; your real browser only ever stores Kite's own session cookie.
+5. A script injected into every page (`kiteClient` in `proxy.js`) catches the URLs the
    page's own JavaScript builds (`fetch`, XHR, `img.src`, `location.href = ...`,
    `window.open`...) and sends them through Kite too. It also tells the Kite UI the
    page's real address and title.
-5. Anything that still slips past is caught on the server using the Referer header.
+6. Anything that still slips past is caught on the server using the Referer header.
 
 ## Roadmap
 
@@ -86,11 +88,33 @@ You can also change the backend at any time with the gear button in Kite's toolb
 - [x] **Stage 2:** injected script that intercepts `fetch`, XHR, `sendBeacon`, workers,
   element URLs, links, forms, `location`, `window.open` and history
 - [x] **Stage 3:** WebSocket (`wss://`) relay at `/ws/` (`backend/websocket.js`)
-- [ ] **Stage 4:** per-site cookie jar and a service worker
+- [x] **Stage 4:** cookies: one private cookie jar per person, kept on the backend
+  (`backend/cookies.js`, `sessions.js`, `kite-api.js`), `document.cookie` in pages,
+  and a cookie manager (the cookie button in the toolbar)
 - [ ] **Stage 5:** JavaScript rewriting (needed for Google, YouTube, logins)
 
-Right now, most ordinary sites work, including live updates over WebSockets. Logins
-(cookies) and the very hardest sites (Google, YouTube) need the later stages.
+Right now, most ordinary sites work, including live updates over WebSockets and staying
+signed in. The very hardest sites (Google, YouTube) need Stage 5, and some sign-in pages
+(notably Google's) refuse to work inside any proxy.
+
+## Cookies and privacy
+
+Sites' cookies never reach your real browser. The backend keeps one cookie jar per
+person using Kite (picked by a private `kite_sid` cookie) and follows the same rules
+browsers do: domains, paths, `Secure`, `HttpOnly`, expiry and `SameSite`.
+
+- **Third-party cookies are blocked**, like Safari and Firefox do. In Kite every site
+  shares the backend's address, so this is what stops one site from reading another
+  site's signed-in pages through Kite. A site only gets its cookies when a page from
+  that same site asks, or when *you* navigate to it (typing an address, clicking a link).
+- Cookies live in memory unless `COOKIE_FILE` is set (the Codespaces script uses
+  `.kite-cookies.json`, which is git-ignored). That file contains your logins: keep it
+  private.
+- The cookie button in the toolbar shows which sites have cookies and clears them.
+- `kite_sid` is a `SameSite=None; Secure; Partitioned` cookie so it works when the
+  frontend and backend are on different sites (e.g. Vercel + your home server). Safari
+  blocks such cookies; if you use Safari, serve both from one site (e.g.
+  `kite.example.com` and `api.kite.example.com`).
 
 ## Security
 

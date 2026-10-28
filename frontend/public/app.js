@@ -211,6 +211,66 @@ document.getElementById("settings").addEventListener("click", () => {
   checkBackend();
 });
 
+// ---------- cookies (Stage 4) ----------
+// Sites' cookies live in a jar on the Kite backend. This panel lists them and
+// lets you clear them; it talks to the backend directly (not through a tab).
+
+const cookiePanel = document.getElementById("cookie-panel");
+const cookieList = document.getElementById("cookie-list");
+
+async function cookieApi(path, form) {
+  const r = await fetch(backend() + "/__kite/" + path, {
+    method: form ? "POST" : "GET",
+    credentials: "include",
+    headers: form ? { "content-type": "application/x-www-form-urlencoded" } : undefined,
+    body: form ? new URLSearchParams(form).toString() : undefined,
+  });
+  if (!r.ok) throw new Error(`backend answered ${r.status}`);
+  return (await r.json()).sites;
+}
+
+function renderCookies(sites) {
+  cookieList.textContent = "";
+  const entries = Object.entries(sites).sort((a, b) => b[1] - a[1]);
+  if (!entries.length) {
+    const li = document.createElement("li");
+    li.textContent = "No cookies yet.";
+    cookieList.append(li);
+    return;
+  }
+  for (const [site, count] of entries) {
+    const li = document.createElement("li");
+    const name = document.createElement("span");
+    name.className = "site";
+    name.textContent = site;
+    const n = document.createElement("span");
+    n.className = "count";
+    n.textContent = `${count} cookie${count === 1 ? "" : "s"}`;
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.textContent = "Clear";
+    clear.addEventListener("click", () => updateCookies("cookies/clear", { site }));
+    li.append(name, n, clear);
+    cookieList.append(li);
+  }
+}
+
+async function updateCookies(path = "cookies", form) {
+  try {
+    renderCookies(await cookieApi(path, form));
+  } catch (err) {
+    cookieList.textContent = `Couldn't load cookies: ${err.message}`;
+  }
+}
+
+document.getElementById("cookies").addEventListener("click", () => {
+  cookiePanel.hidden = !cookiePanel.hidden;
+  if (!cookiePanel.hidden) updateCookies();
+});
+document.getElementById("cookies-clear-all").addEventListener("click", () => {
+  if (confirm("Clear all cookies? You'll be signed out of every site.")) updateCookies("cookies/clear", { site: "" });
+});
+
 // ---------- start ----------
 
 checkBackend();

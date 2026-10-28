@@ -111,7 +111,7 @@ export function handleWebSocket(req, socket, head, options = {}) {
     ];
     for (const h of PASS_TO_SITE) if (req.headers[h]) lines.push(`${h}: ${req.headers[h]}`);
     if (origin) lines.push(`Origin: ${origin}`); // the real page's origin, which sites often check
-    for (const [k, v] of Object.entries(o.extraHeaders ? o.extraHeaders(target) : {})) lines.push(`${k}: ${v}`);
+    for (const [k, v] of Object.entries(o.extraHeaders ? o.extraHeaders(target, origin) : {})) lines.push(`${k}: ${v}`);
     up.write(lines.join("\r\n") + "\r\n\r\n");
     if (head && head.length) up.write(head);
   });

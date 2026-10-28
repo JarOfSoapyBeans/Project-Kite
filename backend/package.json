@@ -1,9 +1,9 @@
 {
   "name": "kite-backend",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
-  "description": "Kite backend: its own fetch-and-rewrite proxy and WebSocket relay. No dependencies.",
+  "description": "Kite backend: its own fetch-and-rewrite proxy, WebSocket relay and cookie jar. No dependencies.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

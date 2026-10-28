@@ -10,6 +10,7 @@ import dns from "node:dns";
 import net from "node:net";
 import zlib from "node:zlib";
 import { promisify } from "node:util";
+import { requestContext } from "./cookies.js";
 
 export const PREFIX = "/proxy/";
 const MAX_BODY = 10 * 1024 * 1024; // largest HTML/CSS we will rewrite, and largest upload
@@ -267,7 +268,7 @@ function rewriteTag(name, attrStr, state) {
 // Comments | <script>/<style> with their contents | any other start tag
 const SCAN = /<!--[\s\S]*?-->|<(script|style)\b((?:"[^"]*"|'[^']*'|[^>"'])*)>([\s\S]*?)<\/\1\s*>|<([a-zA-Z][\w:-]*)((?:"[^"]*"|'[^']*'|[^>"'])*)>/gi;
 
-export function rewriteHtml(html, pageUrl, { allowedOrigins = [] } = {}) {
+export function rewriteHtml(html, pageUrl, { allowedOrigins = [], scriptCookies = "" } = {}) {
   const state = { base: pageUrl };
   let out = html.replace(SCAN, (m, sName, sAttrs, sBody, tName, tAttrs) => {
     if (m.startsWith("<!--")) return m;
@@ -279,7 +280,7 @@ export function rewriteHtml(html, pageUrl, { allowedOrigins = [] } = {}) {
   });
 
   const json = (v) => JSON.stringify(v).replace(/</g, "\\u003c");
-  const inject = `<script data-kite>(${kiteClient.toString()})(${json(pageUrl)},${json(allowedOrigins)});</script>`;
+  const inject = `<script data-kite>(${kiteClient.toString()})(${json(pageUrl)},${json(allowedOrigins)},${json(scriptCookies)});</script>`;
   const head = /<head\b[^>]*>/i.exec(out);
   const at = head ? head.index + head[0].length : /^\s*(?:<!doctype[^>]*>)?/i.exec(out)[0].length;
   return out.slice(0, at) + inject + out.slice(at);
@@ -293,9 +294,11 @@ export function rewriteHtml(html, pageUrl, { allowedOrigins = [] } = {}) {
 //    elements inserted as HTML (innerHTML)
 //  - navigation: link clicks, forms, location.href = ..., window.open
 //  - history.pushState/replaceState, so the page keeps its Kite address
+//  - document.cookie (Stage 4): the page sees and sets its own site's cookies,
+//    kept in the backend's cookie jar (never in your real browser)
 // It also tells the Kite UI the real URL and title, and lets the UI's
 // back/forward/reload buttons control the tab.
-function kiteClient(realUrl, origins) {
+function kiteClient(realUrl, origins, initialCookies) {
   if (window.__kite) return;
   window.__kite = true;
   var PREFIX = "/proxy/";
@@ -401,7 +404,11 @@ function kiteClient(realUrl, origins) {
           input = wrap(input);
         }
       } catch (e) {}
-      return origFetch.call(window, input, init);
+      var pending = origFetch.call(window, input, init);
+      pending.then(function (r) {
+        try { refreshCookies(r.headers.get("x-kite-cookies")); } catch (e) {}
+      }, function () {});
+      return pending;
     };
   }
 
@@ -409,6 +416,13 @@ function kiteClient(realUrl, origins) {
   XMLHttpRequest.prototype.open = function (method, url) {
     var args = Array.prototype.slice.call(arguments);
     if (args.length > 1) args[1] = wrap(url);
+    if (!this.__kiteCookies) {
+      this.__kiteCookies = true;
+      this.addEventListener("readystatechange", function () {
+        if (this.readyState !== 2) return;
+        try { refreshCookies(this.getResponseHeader("x-kite-cookies")); } catch (e) {}
+      });
+    }
     return origXhrOpen.apply(this, args);
   };
 
@@ -636,6 +650,49 @@ function kiteClient(realUrl, origins) {
   window.addEventListener("popstate", syncFromLocation);
   window.addEventListener("hashchange", syncFromLocation);
 
+  // ---------- cookies (Stage 4) ----------
+  // The backend keeps the real cookie jar. The page gets a copy of the cookies
+  // it's allowed to see (not HttpOnly ones); cookies it sets are sent back.
+
+  var cookieView = parseCookies(initialCookies || "");
+  function parseCookies(text) {
+    var view = {};
+    String(text).split(/;\s*/).forEach(function (pair) {
+      var i = pair.indexOf("=");
+      if (i > 0) view[pair.slice(0, i)] = pair.slice(i + 1);
+    });
+    return view;
+  }
+  function refreshCookies(header) {
+    if (header === null || header === undefined) return;
+    try { cookieView = parseCookies(decodeURIComponent(header)); } catch (e) {}
+  }
+  try {
+    Object.defineProperty(document, "cookie", {
+      configurable: true,
+      get: function () {
+        return Object.keys(cookieView).map(function (k) { return k + "=" + cookieView[k]; }).join("; ");
+      },
+      set: function (v) {
+        var text = String(v);
+        var first = text.split(";")[0];
+        var i = first.indexOf("=");
+        if (i > 0) {
+          var name = first.slice(0, i).trim();
+          var maxAge = /;\s*max-age\s*=\s*(-?\d+)/i.exec(text);
+          var expires = /;\s*expires\s*=\s*([^;]+)/i.exec(text);
+          var gone = maxAge ? Number(maxAge[1]) <= 0 : expires ? Date.parse(expires[1]) <= Date.now() : false;
+          if (gone) delete cookieView[name];
+          else cookieView[name] = first.slice(i + 1).trim();
+        }
+        try {
+          if (origBeacon) origBeacon.call(navigator, "/__kite/cookie", new Blob([text], { type: "text/plain" }));
+          else origFetch.call(window, "/__kite/cookie", { method: "POST", body: text, keepalive: true });
+        } catch (e) {}
+      },
+    });
+  } catch (e) {}
+
   // ---------- Kite UI ----------
 
   if (isTab) {
@@ -670,7 +727,7 @@ const NO_FORWARD_PREFIX = /^(x-forwarded-|cf-|x-arr-|x-original-|x-ms-|x-envoy-|
 // Make the request look to the site like it came straight from the real page:
 // the real page as Referer/Origin, and matching Sec-Fetch-* headers. Many sites
 // return 403 for images, stylesheets or pings that arrive without them.
-function upstreamHeaders(req, target) {
+function upstreamHeaders(req, target, o = {}) {
   const h = { "accept-encoding": "gzip, deflate, br" };
   for (const [name, value] of Object.entries(req.headers)) {
     if (!NO_FORWARD.has(name) && !NO_FORWARD_PREFIX.test(name)) h[name] = value;
@@ -685,6 +742,10 @@ function upstreamHeaders(req, target) {
     if (req.headers.origin) h.origin = page.origin;
   } else if (req.headers["sec-fetch-site"]) {
     h["sec-fetch-site"] = "none"; // typed into the address bar
+  }
+  if (o.jar) {
+    const cookie = o.jar.header(target, requestContext(page, target, req));
+    if (cookie) h.cookie = cookie;
   }
   return h;
 }
@@ -711,7 +772,7 @@ function cleanHeaders(headers) {
 function fetchUpstream(target, req, o) {
   return new Promise((resolve, reject) => {
     const u = new URL(target);
-    const headers = upstreamHeaders(req, u);
+    const headers = upstreamHeaders(req, u, o);
     const up = (u.protocol === "https:" ? https : http).request(
       {
         protocol: u.protocol,
@@ -785,7 +846,8 @@ function sendError(res, status, message) {
   );
 }
 
-// options: allowPrivate (tests only), allowedPorts (array, or null for any), allowedOrigins
+// options: allowPrivate (tests only), allowedPorts (array, or null for any), allowedOrigins,
+//          jar (a CookieJar for this session, Stage 4), onCookies (called when it changes)
 export async function handleProxy(req, res, options = {}) {
   const o = { allowPrivate: false, allowedPorts: [80, 443, 8080, 8443], allowedOrigins: [], ...options };
   let target;
@@ -813,9 +875,14 @@ export async function handleProxy(req, res, options = {}) {
     // the next hop and the backend would refuse it, so follow those redirects here.
     const followRedirects = !sourcePage(req) && (req.method === "GET" || req.method === "HEAD");
     let up;
+    let cookiesChanged = false;
     for (let hops = 0; ; hops++) {
       checkTarget(new URL(target), o); // every hop goes through the SSRF checks
       up = await fetchUpstream(target, req, o);
+      if (o.jar && up.headers["set-cookie"] && o.jar.setAll(up.headers["set-cookie"], target)) {
+        cookiesChanged = true;
+        if (o.onCookies) o.onCookies();
+      }
       const loc = up.headers.location;
       if (!followRedirects || hops >= 10 || up.statusCode < 300 || up.statusCode >= 400 || !loc) break;
       let next;
@@ -831,6 +898,10 @@ export async function handleProxy(req, res, options = {}) {
     const status = up.statusCode;
     const headers = cleanHeaders(up.headers);
     res.setHeader("x-kite-source", "upstream"); // visible to the server's error log
+    if (cookiesChanged) {
+      // Lets the page's document.cookie pick up cookies set by this response.
+      headers["x-kite-cookies"] = encodeURIComponent(o.jar.scriptCookies(sourcePage(req) || target));
+    }
 
     if (status >= 300 && status < 400 && up.headers.location) {
       up.resume();
@@ -867,7 +938,9 @@ export async function handleProxy(req, res, options = {}) {
     const raw = await readLimited(up, MAX_BODY);
     const text = decodeText(await decodeBody(raw, up.headers["content-encoding"]), type, isHtml);
     const body = Buffer.from(
-      isHtml ? rewriteHtml(text, target, { allowedOrigins: o.allowedOrigins }) : rewriteCss(text, target),
+      isHtml
+        ? rewriteHtml(text, target, { allowedOrigins: o.allowedOrigins, scriptCookies: o.jar ? o.jar.scriptCookies(target) : "" })
+        : rewriteCss(text, target),
       "utf8"
     );
     for (const h of ["content-encoding", "content-length", "etag", "last-modified", "accept-ranges", "content-range"]) {

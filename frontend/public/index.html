@@ -17,9 +17,18 @@
         <button type="button" id="forward" title="Forward">&#8594;</button>
         <button type="button" id="reload" title="Reload">&#8635;</button>
         <input id="address" type="text" spellcheck="false" placeholder="Search or enter address" />
+        <button type="button" id="cookies" title="Cookies">&#127850;</button>
         <button type="button" id="settings" title="Backend settings">&#9881;</button>
       </form>
       <div id="status" hidden></div>
+      <div id="cookie-panel" hidden>
+        <div class="panel-head">
+          <strong>Cookies</strong>
+          <span class="muted">Kept on your Kite backend, never in this browser.</span>
+          <button type="button" id="cookies-clear-all">Clear all</button>
+        </div>
+        <ul id="cookie-list"></ul>
+      </div>
     </header>
 
     <main id="views"></main>
