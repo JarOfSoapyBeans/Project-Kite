@@ -82,3 +82,34 @@ test("the server's error log can see who answered", async () => {
   s.close();
   assert.deepEqual(seenBy, ["upstream", "kite"]);
 });
+
+test("custom headers from page scripts reach the site; private ones never do", async () => {
+  const echo = http.createServer((req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(req.headers));
+  });
+  const eu = await listen(echo);
+  const r = await fetch(proxyUrl + P(eu + "/youtubei/v1/guide"), {
+    method: "POST",
+    body: '{"context":{}}',
+    headers: {
+      "content-type": "application/json",
+      "x-goog-api-key": "AIzaTest",
+      "x-youtube-client-name": "1",
+      cookie: "SID=secret",
+      "x-forwarded-for": "203.0.113.7",
+      "cf-connecting-ip": "203.0.113.7",
+      "x-real-ip": "203.0.113.7",
+      forwarded: "for=203.0.113.7",
+    },
+  });
+  const h = await r.json();
+  echo.close();
+  assert.equal(h["x-goog-api-key"], "AIzaTest");
+  assert.equal(h["x-youtube-client-name"], "1");
+  assert.equal(h["content-length"], "14", "POST bodies keep their length (no chunked upload)");
+  assert.equal(h["transfer-encoding"], undefined);
+  for (const name of ["cookie", "x-forwarded-for", "cf-connecting-ip", "x-real-ip", "forwarded"]) {
+    assert.equal(h[name], undefined, name + " must not be forwarded");
+  }
+});

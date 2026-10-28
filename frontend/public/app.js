@@ -110,7 +110,7 @@ function createTab(input) {
   tab.labelEl.className = "title";
   const close = document.createElement("button");
   close.className = "close";
-  close.textContent = "×";
+  close.textContent = "\u00d7";
   close.title = "Close tab";
   close.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -136,11 +136,20 @@ function closeTab(tab) {
   else if (tab === activeTab) selectTab(tabs[Math.min(index, tabs.length - 1)]);
 }
 
-// Proxied pages tell us their real URL and title.
+// Messages from proxied pages: their real URL and title, or a request to open a
+// link in a new tab (window.open, target="_blank", ctrl-click).
 window.addEventListener("message", (e) => {
   if (e.origin !== backendOrigin()) return;
   const d = e.data;
-  if (!d || d.kite !== 1 || d.type !== "page") return;
+  if (!d || d.kite !== 1) return;
+  if (d.type === "open") {
+    try {
+      const u = new URL(String(d.url));
+      if (u.protocol === "http:" || u.protocol === "https:") createTab(u.href);
+    } catch {}
+    return;
+  }
+  if (d.type !== "page") return;
   const tab = tabs.find((t) => t.iframe.contentWindow === e.source);
   if (!tab) return;
   tab.url = String(d.url);
@@ -160,7 +169,7 @@ async function navigate(input, tab = activeTab) {
   if (!url || !tab) return;
   if (!backendOk && !(await checkBackend())) return;
   tab.url = url;
-  tab.title = "Loading…";
+  tab.title = "Loading\u2026";
   renderTab(tab);
   if (tab === activeTab) updateAddress();
   tab.iframe.src = proxied(url);

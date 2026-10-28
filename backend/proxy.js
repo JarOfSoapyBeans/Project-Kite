@@ -285,18 +285,25 @@ export function rewriteHtml(html, pageUrl, { allowedOrigins = [] } = {}) {
   return out.slice(0, at) + inject + out.slice(at);
 }
 
-// Runs inside every proxied page, before the page's own scripts. It:
-//  - tells the Kite UI the real URL and title,
-//  - keeps history.pushState/replaceState URLs in /proxy/ form, so the page can't
-//    move itself off its Kite address (which would break its later requests),
-//  - lets the UI's back/forward/reload buttons control the tab.
+// Runs inside every proxied page, before the page's own scripts (Stage 2).
+// The page's JavaScript builds URLs while it runs, which the server never sees.
+// This script catches those and sends them through Kite too:
+//  - fetch, XMLHttpRequest, sendBeacon, EventSource, Worker
+//  - element URLs set from JavaScript (img.src, a.href, setAttribute...) and
+//    elements inserted as HTML (innerHTML)
+//  - navigation: link clicks, forms, location.href = ..., window.open
+//  - history.pushState/replaceState, so the page keeps its Kite address
+// It also tells the Kite UI the real URL and title, and lets the UI's
+// back/forward/reload buttons control the tab.
 function kiteClient(realUrl, origins) {
   if (window.__kite) return;
   window.__kite = true;
   var PREFIX = "/proxy/";
   var current = realUrl;
-  var parent = window.parent;
-  var isTab = parent !== window && parent === window.top;
+  var isTab = window.parent !== window && window.parent === window.top;
+  var origSetAttribute = Element.prototype.setAttribute;
+
+  // ---------- URL helpers ----------
 
   function encode(url) {
     var bytes = new TextEncoder().encode(url);
@@ -315,46 +322,274 @@ function kiteClient(realUrl, origins) {
       return null;
     }
   }
-  // Turn a URL the page passes to history.* into { real, path }.
-  function toProxy(url) {
-    var here = new URL(url, location.href);
-    if (here.origin === location.origin && here.pathname.indexOf(PREFIX) === 0) {
-      var d = decode(here.pathname.slice(PREFIX.length).split("/")[0]);
-      if (d) {
-        // Already a Kite URL (e.g. built from location.href).
-        if (here.search) d.search = here.search;
-        d.hash = here.hash;
-        return { real: d.href, path: here.pathname + here.search + here.hash };
+  // The real-site URL for any URL the page uses (relative, absolute, or already a
+  // Kite URL), or null for things to leave alone (data:, blob:, #hash...).
+  function realOf(url) {
+    var s = String(url).trim();
+    if (!s || s.charAt(0) === "#" || /^(?:data|blob|javascript|about|mailto|tel|sms):/i.test(s)) return null;
+    var here = new URL(s, location.href);
+    if (here.origin === location.origin) {
+      if (here.pathname.indexOf(PREFIX) === 0) {
+        var d = decode(here.pathname.slice(PREFIX.length).split("/")[0]);
+        if (d) {
+          if (here.search) d.search = here.search;
+          d.hash = here.hash;
+          return d;
+        }
       }
+      // An absolute URL built from location.origin really means the real site.
+      if (/^[a-z][a-z0-9+.-]*:/i.test(s)) return new URL(here.pathname + here.search + here.hash, current);
     }
-    var absolute = /^[a-z][a-z0-9+.-]*:/i.test(url);
-    var real = here.origin === location.origin && absolute
-      ? new URL(here.pathname + here.search + here.hash, current) // built from location.origin
-      : new URL(url, current); // relative or a real-site URL
-    if (real.protocol !== "http:" && real.protocol !== "https:") return null;
-    var hash = real.hash;
-    real.hash = "";
-    return { real: real.href + hash, path: PREFIX + encode(real.href) + hash };
+    var real = new URL(s, current);
+    return real.protocol === "http:" || real.protocol === "https:" ? real : null;
+  }
+  function proxyPath(real) {
+    var u = new URL(real.href);
+    var hash = u.hash;
+    u.hash = "";
+    return PREFIX + encode(u.href) + hash;
+  }
+  // Rewrite a URL to go through Kite; anything unexpected is returned unchanged.
+  function wrap(url) {
+    if (url === undefined || url === null) return url;
+    var s = String(url);
+    if (s.indexOf(PREFIX) === 0) return url; // already a Kite path
+    try {
+      var r = realOf(s);
+      return r ? proxyPath(r) : url;
+    } catch (e) {
+      return url;
+    }
+  }
+  function wrapSrcset(value) {
+    return String(value)
+      .split(/,\s+/)
+      .map(function (part) {
+        var bits = part.trim().split(/\s+/);
+        bits[0] = wrap(bits[0]);
+        return bits.join(" ");
+      })
+      .join(", ");
   }
 
-  function report() {
-    if (!isTab) return;
-    var msg = { kite: 1, type: "page", url: current, title: document.title || "" };
-    if (!origins.length) return parent.postMessage(msg, "*");
+  // ---------- talking to the Kite UI ----------
+
+  function post(msg) {
+    if (window.top === window) return;
+    if (!origins.length) return window.top.postMessage(msg, "*");
     for (var i = 0; i < origins.length; i++) {
-      try { parent.postMessage(msg, origins[i]); } catch (e) {}
+      try { window.top.postMessage(msg, origins[i]); } catch (e) {}
     }
   }
+  function report() {
+    if (isTab) post({ kite: 1, type: "page", url: current, title: document.title || "" });
+  }
+  function openTab(real) {
+    post({ kite: 1, type: "open", url: real.href });
+  }
+
+  // ---------- network requests ----------
+
+  var origFetch = window.fetch;
+  if (origFetch) {
+    window.fetch = function (input, init) {
+      try {
+        if (typeof Request !== "undefined" && input instanceof Request) {
+          var w = wrap(input.url);
+          if (w !== input.url) input = new Request(w, input);
+        } else {
+          input = wrap(input);
+        }
+      } catch (e) {}
+      return origFetch.call(window, input, init);
+    };
+  }
+
+  var origXhrOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (method, url) {
+    var args = Array.prototype.slice.call(arguments);
+    if (args.length > 1) args[1] = wrap(url);
+    return origXhrOpen.apply(this, args);
+  };
+
+  if (navigator.sendBeacon) {
+    var origBeacon = navigator.sendBeacon;
+    navigator.sendBeacon = function (url, data) {
+      return origBeacon.call(navigator, wrap(url), data);
+    };
+  }
+
+  ["EventSource", "Worker", "SharedWorker"].forEach(function (name) {
+    var Original = window[name];
+    if (!Original) return;
+    var Wrapped = function (url, options) {
+      return new Original(wrap(url), options);
+    };
+    Wrapped.prototype = Original.prototype;
+    Object.getOwnPropertyNames(Original).forEach(function (key) {
+      if (/^(prototype|name|length|arguments|caller)$/.test(key)) return;
+      try { Wrapped[key] = Original[key]; } catch (e) {}
+    });
+    window[name] = Wrapped;
+  });
+
+  // A site's own service worker would be installed on Kite's address and take over
+  // every Kite request (YouTube tries this), so refuse politely.
+  if (navigator.serviceWorker && navigator.serviceWorker.register) {
+    try {
+      Object.getPrototypeOf(navigator.serviceWorker).register = function () {
+        return Promise.reject(new DOMException("Service workers are disabled in Kite", "SecurityError"));
+      };
+    } catch (e) {}
+  }
+
+  // ---------- URLs set on elements from JavaScript ----------
+
+  function hook(Ctor, prop, fn) {
+    if (!Ctor) return;
+    var d = Object.getOwnPropertyDescriptor(Ctor.prototype, prop);
+    if (!d || !d.set || !d.configurable) return;
+    Object.defineProperty(Ctor.prototype, prop, {
+      configurable: true,
+      enumerable: d.enumerable,
+      get: d.get,
+      set: function (v) { d.set.call(this, fn(v)); },
+    });
+  }
+  [
+    ["HTMLImageElement", "src"], ["HTMLScriptElement", "src"], ["HTMLLinkElement", "href"],
+    ["HTMLIFrameElement", "src"], ["HTMLFrameElement", "src"], ["HTMLSourceElement", "src"],
+    ["HTMLMediaElement", "src"], ["HTMLEmbedElement", "src"], ["HTMLObjectElement", "data"],
+    ["HTMLAnchorElement", "href"], ["HTMLAreaElement", "href"], ["HTMLFormElement", "action"],
+    ["HTMLInputElement", "src"], ["HTMLInputElement", "formAction"], ["HTMLButtonElement", "formAction"],
+    ["HTMLTrackElement", "src"], ["HTMLVideoElement", "poster"],
+  ].forEach(function (p) { hook(window[p[0]], p[1], wrap); });
+  hook(window.HTMLImageElement, "srcset", wrapSrcset);
+  hook(window.HTMLSourceElement, "srcset", wrapSrcset);
+
+  var URL_ATTRS = { src: 1, href: 1, action: 1, formaction: 1, poster: 1, data: 1, srcset: 2, imagesrcset: 2 };
+  function fixAttr(el, name, value) {
+    var kind = URL_ATTRS[name];
+    if (!kind || el.namespaceURI !== "http://www.w3.org/1999/xhtml") return value;
+    if (name === "data" && el.tagName !== "OBJECT") return value;
+    return kind === 2 ? wrapSrcset(value) : wrap(value);
+  }
+  Element.prototype.setAttribute = function (name, value) {
+    return origSetAttribute.call(this, name, fixAttr(this, String(name).toLowerCase(), value));
+  };
+
+  // Elements added as HTML (innerHTML, insertAdjacentHTML...) never pass through
+  // the setters above, so fix their URLs as they arrive.
+  var SELECTOR = "img,source,iframe,frame,embed,object,video,audio,track,link,a,area,form,input";
+  function fixElement(el) {
+    for (var name in URL_ATTRS) {
+      var v = el.getAttribute(name);
+      if (v === null) continue;
+      var nv = fixAttr(el, name, v);
+      if (nv !== v) origSetAttribute.call(el, name, nv);
+    }
+  }
+  new MutationObserver(function (records) {
+    for (var i = 0; i < records.length; i++) {
+      var nodes = records[i].addedNodes;
+      for (var j = 0; j < nodes.length; j++) {
+        var n = nodes[j];
+        if (n.nodeType !== 1) continue;
+        if (n.matches(SELECTOR)) fixElement(n);
+        var inner = n.querySelectorAll(SELECTOR);
+        for (var k = 0; k < inner.length; k++) fixElement(inner[k]);
+      }
+    }
+  }).observe(document.documentElement, { childList: true, subtree: true });
+
+  // ---------- navigation ----------
+
+  var origOpen = window.open;
+  window.open = function (url, target) {
+    var real = null;
+    try { real = url ? realOf(url) : null; } catch (e) {}
+    if (!real) return origOpen.apply(window, arguments);
+    var t = String(target || "_blank").toLowerCase();
+    if (t === "_self" || t === "_top" || t === "_parent") {
+      location.assign(proxyPath(real));
+      return window;
+    }
+    openTab(real); // a new Kite tab instead of a real browser window
+    return null;
+  };
+
+  // Links that point off Kite (or ask for a new window).
+  window.addEventListener("click", function (e) {
+    if (e.defaultPrevented || e.button !== 0) return;
+    var a = e.target && e.target.closest ? e.target.closest("a[href],area[href]") : null;
+    if (!a || a.hasAttribute("download")) return;
+    var href = a.getAttribute("href");
+    if (!href || href.charAt(0) === "#") return;
+    var real = null;
+    try { real = realOf(href); } catch (err) {}
+    if (!real) return;
+    var newTab = (a.getAttribute("target") || "").toLowerCase() === "_blank" || e.ctrlKey || e.metaKey || e.shiftKey;
+    var offsite = new URL(a.href, location.href).origin !== location.origin;
+    if (!newTab && !offsite) return;
+    e.preventDefault();
+    if (newTab) openTab(real);
+    else location.assign(proxyPath(real));
+  });
+
+  // Forms whose action was changed after the page loaded.
+  window.addEventListener("submit", function (e) {
+    var f = e.target;
+    if (!f || f.tagName !== "FORM") return;
+    var act = f.getAttribute("action");
+    if (act) {
+      var w = wrap(act);
+      if (w !== act) origSetAttribute.call(f, "action", w);
+    }
+  }, true);
+
+  // Anything else that would leave the tab's Kite address: location.href = "...",
+  // location.assign("/results?..."), form.submit() to another site...
+  // (Navigation API; Chromium-based browsers.)
+  if (window.navigation && window.navigation.addEventListener) {
+    window.navigation.addEventListener("navigate", function (e) {
+      if (!e.cancelable || e.downloadRequest || e.hashChange || e.navigationType === "traverse") return;
+      var dest;
+      try { dest = new URL(e.destination.url); } catch (err) { return; }
+      if (dest.origin === location.origin && dest.pathname.indexOf(PREFIX) === 0) return; // already Kite
+      var real = null;
+      try { real = realOf(dest.href); } catch (err) {}
+      if (!real) return;
+      e.preventDefault();
+      var path = proxyPath(real);
+      if (!e.formData) return location.assign(path);
+      var form = document.createElement("form");
+      form.method = "post";
+      origSetAttribute.call(form, "action", path);
+      form.style.display = "none";
+      e.formData.forEach(function (v, k) {
+        if (typeof v !== "string") return;
+        var input = document.createElement("input");
+        input.type = "hidden";
+        input.name = k;
+        input.value = v;
+        form.appendChild(input);
+      });
+      document.body.appendChild(form);
+      HTMLFormElement.prototype.submit.call(form);
+    });
+  }
+
+  // ---------- history: keep the tab on its Kite address ----------
 
   ["pushState", "replaceState"].forEach(function (name) {
     var original = history[name];
     history[name] = function (state, title, url) {
       if (url !== undefined && url !== null && url !== "") {
-        var p = null;
-        try { p = toProxy(String(url)); } catch (e) {}
-        if (p) {
-          current = p.real;
-          url = p.path;
+        var real = null;
+        try { real = realOf(url); } catch (e) {}
+        if (real) {
+          current = real.href;
+          url = proxyPath(real);
         }
       }
       var result = original.call(this, state, title, url);
@@ -366,6 +601,7 @@ function kiteClient(realUrl, origins) {
   function syncFromLocation() {
     var d = decode(location.pathname.slice(PREFIX.length).split("/")[0]);
     if (d) {
+      d.search = location.search || d.search;
       d.hash = location.hash;
       current = d.href;
     }
@@ -373,6 +609,8 @@ function kiteClient(realUrl, origins) {
   }
   window.addEventListener("popstate", syncFromLocation);
   window.addEventListener("hashchange", syncFromLocation);
+
+  // ---------- Kite UI ----------
 
   if (isTab) {
     report();
@@ -391,18 +629,26 @@ function kiteClient(realUrl, origins) {
 
 // ---------- fetching ----------
 
-const FORWARD_HEADERS = [
-  "user-agent", "accept", "accept-language", "content-type", "range", "dnt",
-  "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform", "sec-fetch-mode", "sec-fetch-user",
-  "upgrade-insecure-requests", "x-requested-with",
-];
+// Request headers never passed on to the website: connection plumbing, headers
+// Kite sets itself, your cookies, and anything that could reveal your IP address.
+// Everything else (including custom headers that sites' own JavaScript adds,
+// like API keys and client versions) is forwarded.
+const NO_FORWARD = new Set([
+  "host", "connection", "keep-alive", "proxy-authorization", "proxy-connection", "te", "trailer",
+  "transfer-encoding", "upgrade", "cookie", "referer", "origin", "accept-encoding",
+  "sec-fetch-site", "sec-fetch-dest", "forwarded", "via", "x-real-ip", "x-client-ip",
+  "true-client-ip", "cdn-loop",
+]);
+const NO_FORWARD_PREFIX = /^(x-forwarded-|cf-|x-arr-|x-original-|x-ms-|x-envoy-|x-github-|x-kite-)/;
 
 // Make the request look to the site like it came straight from the real page:
 // the real page as Referer/Origin, and matching Sec-Fetch-* headers. Many sites
 // return 403 for images, stylesheets or pings that arrive without them.
 function upstreamHeaders(req, target) {
   const h = { "accept-encoding": "gzip, deflate, br" };
-  for (const name of FORWARD_HEADERS) if (req.headers[name]) h[name] = req.headers[name];
+  for (const [name, value] of Object.entries(req.headers)) {
+    if (!NO_FORWARD.has(name) && !NO_FORWARD_PREFIX.test(name)) h[name] = value;
+  }
   const page = sourcePage(req);
   const dest = req.headers["sec-fetch-dest"];
   if (dest) h["sec-fetch-dest"] = dest === "iframe" && !page ? "document" : dest; // a Kite tab is a normal page to the site

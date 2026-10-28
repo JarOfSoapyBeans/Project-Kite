@@ -82,8 +82,10 @@ const server = http.createServer((req, res) => {
   });
 
   // Log every error, and whether Kite or the website produced it.
+  // (Source maps are only fetched by browser DevTools; failures there don't matter.)
   res.on("finish", () => {
-    if (res.statusCode >= 400) console.log(`[${res.getHeader("x-kite-source") || "kite"} ${res.statusCode}] ${describe(req.url)}`);
+    if (res.statusCode < 400 || /\.(map|sourcemap)$/.test(pathname)) return;
+    console.log(`[${res.getHeader("x-kite-source") || "kite"} ${res.statusCode}] ${describe(req.url)}`);
   });
 
   if (pathname.startsWith(PREFIX)) return handleProxy(req, res, proxyOptions);
