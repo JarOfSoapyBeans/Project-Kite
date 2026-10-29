@@ -17,6 +17,8 @@ set PORT=8080
 
 rem Name of a named Cloudflare Tunnel (a permanent address, see README).
 rem Leave empty to use a quick tunnel (a new random address every time).
+rem If %USERPROFILE%\.cloudflared\<name>.yml exists (e.g. kite.yml), the tunnel
+rem uses that settings file instead of the shared config.yml.
 set TUNNEL_NAME=
 
 rem ------------------------------------------------------------------
@@ -42,6 +44,13 @@ echo Starting the Kite backend on port %PORT% ...
 start "Kite backend" /d "%~dp0backend" cmd /k node server.js
 
 if "%TUNNEL_NAME%"=="" goto quick_tunnel
+set TUNNEL_CONFIG=%USERPROFILE%\.cloudflared\%TUNNEL_NAME%.yml
+if not exist "%TUNNEL_CONFIG%" goto named_tunnel
+echo Starting the Cloudflare Tunnel "%TUNNEL_NAME%" with %TUNNEL_CONFIG% ...
+start "Kite tunnel" cmd /k cloudflared tunnel --config "%TUNNEL_CONFIG%" run
+goto started
+
+:named_tunnel
 echo Starting the Cloudflare Tunnel "%TUNNEL_NAME%" ...
 start "Kite tunnel" cmd /k cloudflared tunnel run --url http://localhost:%PORT% %TUNNEL_NAME%
 goto started

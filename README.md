@@ -98,6 +98,20 @@ cloudflared tunnel route dns kite kite-api.YOUR-DOMAIN.com
 then set `TUNNEL_NAME=kite` in `start_home.bat`. Your backend is then always at
 `https://kite-api.YOUR-DOMAIN.com`.
 
+If you already have other tunnels, `cloudflared` reads their shared
+`%USERPROFILE%\.cloudflared\config.yml` and Kite's address answers **404**. Give Kite its
+own settings file, `%USERPROFILE%\.cloudflared\kite.yml` (`start_home.bat` uses it
+automatically when `TUNNEL_NAME=kite`); find the ID with `cloudflared tunnel list`:
+
+```yaml
+tunnel: YOUR-TUNNEL-ID
+credentials-file: C:\Users\YOU\.cloudflared\YOUR-TUNNEL-ID.json
+ingress:
+  - hostname: kite-api.YOUR-DOMAIN.com
+    service: http://localhost:8080
+  - service: http_status:404
+```
+
 To update later: `git pull`, then restart `start_home.bat`. Your cookies stay in
 `.kite-cookies.json` (git-ignored; it holds your logins, so keep it private).
 
