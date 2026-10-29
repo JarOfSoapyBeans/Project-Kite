@@ -112,7 +112,11 @@ test("sessions: a private kite_sid per person, reused, and saved to a file", () 
 
   jar.set("login=yes; Max-Age=3600; Path=/", "https://site.test/");
   sessions.save();
-  assert.equal((fs.statSync(file).mode & 0o777).toString(8), "600", "file is private");
+  if (process.platform !== "win32") {
+    // Windows has no owner-only file mode; there the file is protected by the
+    // permissions of the folder it's in (e.g. your user folder).
+    assert.equal((fs.statSync(file).mode & 0o777).toString(8), "600", "file is private");
+  }
   const reloaded = new Sessions({ file });
   assert.equal(reloaded.jarFor(fakeReq({ cookie: sid })).header("https://site.test/"), "login=yes");
 });
