@@ -66,6 +66,41 @@ your Vercel URL in the backend's `ALLOWED_ORIGINS`.
 
 You can also change the backend at any time with the gear button in Kite's toolbar.
 
+## Run the backend at home (Windows)
+
+A home internet connection is trusted by sites far more than a cloud server, so this is
+the best place to run Kite's backend. You need [Git](https://git-scm.com),
+[Node.js 20+](https://nodejs.org) and
+[cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/):
+
+```bat
+winget install --id Git.Git -e
+winget install OpenJS.NodeJS.LTS
+winget install --id Cloudflare.cloudflared
+```
+
+1. Get the code: `git clone https://github.com/JarOfSoapyBeans/Project-Kite.git`
+2. Edit the settings at the top of `start_home.bat` (`notepad start_home.bat`): set
+   `ALLOWED_ORIGINS` to your Kite frontend's address.
+3. Double-click `start_home.bat` (or run it in Command Prompt). It opens two windows:
+   the backend, and a Cloudflare Tunnel that gives it a public `https://` address.
+4. Give that address to Kite (gear button, or `BACKEND_URL` on Vercel).
+
+**A permanent address (recommended).** A quick tunnel gets a new random address every
+time. With a domain on Cloudflare, create a named tunnel once:
+
+```bat
+cloudflared tunnel login
+cloudflared tunnel create kite
+cloudflared tunnel route dns kite kite-api.YOUR-DOMAIN.com
+```
+
+then set `TUNNEL_NAME=kite` in `start_home.bat`. Your backend is then always at
+`https://kite-api.YOUR-DOMAIN.com`.
+
+To update later: `git pull`, then restart `start_home.bat`. Your cookies stay in
+`.kite-cookies.json` (git-ignored; it holds your logins, so keep it private).
+
 ## How it works
 
 1. A tab loads `BACKEND/proxy/<base64url of the real URL>` in an iframe.
