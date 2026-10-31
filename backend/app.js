@@ -5,7 +5,7 @@
 //   /__kite/...   Kite's own endpoints: cookies (Stage 4)
 
 import http from "node:http";
-import { handleProxy, PREFIX, TICKET_PARAM, decodeUrl, resolveViaReferer, toProxyUrl } from "./proxy.js";
+import { handleProxy, PREFIX, TICKET_PARAM, MAX_HEADER_BYTES, decodeUrl, resolveViaReferer, toProxyUrl } from "./proxy.js";
 import { handleWebSocket, WS_PREFIX } from "./websocket.js";
 import { Sessions } from "./sessions.js";
 import { siteOf } from "./cookies.js";
@@ -103,7 +103,7 @@ export function createKiteServer(config = {}) {
   const requestSlot = limiter(maxActivePerIp);
   const socketSlot = limiter(maxWebSocketsPerIp);
 
-  const server = http.createServer((req, res) => {
+  const server = http.createServer({ maxHeaderSize: MAX_HEADER_BYTES }, (req, res) => {
     const { pathname } = new URL(req.url, "http://localhost");
 
     if (pathname === "/health") {

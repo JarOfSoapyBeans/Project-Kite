@@ -16,6 +16,9 @@ export const PREFIX = "/proxy/";
 export const TICKET_PARAM = "__kite_t"; // the Kite UI's tab ticket; never sent to sites
 const MAX_BODY = 10 * 1024 * 1024; // largest HTML/CSS we will rewrite, and largest upload
 const TIMEOUT_MS = 30_000;
+// Node refuses responses whose headers exceed 16 KB by default (HPE_HEADER_OVERFLOW).
+// Big sites (YouTube, Google) send far more: dozens of cookies, long policies.
+export const MAX_HEADER_BYTES = 256 * 1024;
 
 const gunzip = promisify(zlib.gunzip);
 const inflate = promisify(zlib.inflate);
@@ -790,6 +793,7 @@ function fetchUpstream(target, req, o) {
         method: req.method,
         headers,
         lookup: guardedLookup(o.allowPrivate),
+        maxHeaderSize: MAX_HEADER_BYTES,
       },
       resolve
     );

@@ -113,3 +113,21 @@ test("custom headers from page scripts reach the site; private ones never do", a
     assert.equal(h[name], undefined, name + " must not be forwarded");
   }
 });
+
+test("sites with very large response headers (like YouTube) still load", async () => {
+  const big = http.createServer((req, res) => {
+    const cookies = Array.from({ length: 60 }, (_, i) => `c${i}=${"v".repeat(600)}; Path=/`);
+    // ~36 KB of Set-Cookie (Kite keeps those on the server) plus a long policy header.
+    res.writeHead(200, { "content-type": "text/plain", "set-cookie": cookies, "x-policy": "p".repeat(6000) });
+    res.end("big-ok");
+  });
+  const bu = await listen(big);
+  try {
+    const r = await fetch(proxyUrl + P(bu + "/"));
+    assert.equal(r.status, 200);
+    assert.equal(await r.text(), "big-ok");
+  } finally {
+    big.close();
+    big.closeAllConnections();
+  }
+});

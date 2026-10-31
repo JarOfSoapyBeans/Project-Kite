@@ -9,11 +9,11 @@
 
 import net from "node:net";
 import tls from "node:tls";
-import { checkTarget, guardedLookup } from "./proxy.js";
+import { checkTarget, guardedLookup, MAX_HEADER_BYTES } from "./proxy.js";
 
 export const WS_PREFIX = "/ws/";
 const CONNECT_TIMEOUT_MS = 15_000;
-const MAX_HANDSHAKE = 16 * 1024;
+const MAX_HANDSHAKE = MAX_HEADER_BYTES;
 
 // Headers from the page's handshake that the site needs to see.
 const PASS_TO_SITE = [
