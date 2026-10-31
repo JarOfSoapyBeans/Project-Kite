@@ -1,6 +1,8 @@
 // Kite's own endpoints under /__kite/ (Stage 4). No dependencies.
 //
 //   POST /__kite/cookie            document.cookie writes from a proxied page
+//   POST /__kite/log               errors and navigations on a proxied page, printed
+//                                  in the backend's window (KITE_PAGE_LOG=0 turns off)
 //   GET  /__kite/cookies           which sites you have cookies for   (Kite UI only)
 //   POST /__kite/cookies/clear     forget cookies (all, or one site)  (Kite UI only)
 //   GET  /__kite/ticket            a pass for loading pages in tabs   (Kite UI only)
@@ -34,6 +36,36 @@ function send(res, status, body = "", headers = {}) {
   res.end(body);
 }
 
+// Page diagnostics: at most 60 lines a minute, control characters removed.
+let logBudget = 60;
+setInterval(() => (logBudget = 60), 60_000).unref();
+const LOG_ON = process.env.KITE_PAGE_LOG !== "0";
+function clean(text, max) {
+  // Long URLs (video addresses are ~1500 characters) are cut down to stay readable.
+  return String(text)
+    .replace(/[\x00-\x09\x0b-\x1f\x7f\u2028\u2029]/g, " ")
+    .replace(/https?:\/\/\S{120,}/g, (u) => u.slice(0, 110) + "...")
+    .slice(0, max);
+}
+function printPageLog(body) {
+  if (!LOG_ON || logBudget <= 0) return;
+  let m;
+  try {
+    m = JSON.parse(body);
+  } catch {
+    return;
+  }
+  logBudget--;
+  let page = "";
+  try {
+    const u = new URL(m.page);
+    page = u.host + u.pathname + u.search;
+  } catch {}
+  const label = m.kind === "navigate" ? "page navigate" : "page error";
+  const lines = clean(m.text, 2000).split("\n").map((l) => l.trim()).filter(Boolean);
+  console.log(`[${label}] ${clean(page, 120)}: ${lines[0] || ""}` + lines.slice(1, 8).map((l) => "\n      " + l).join(""));
+}
+
 // Returns true if the request was a /__kite/ request (and has been answered).
 export async function handleKiteApi(req, res, { sessions, allowedOrigins = [] }) {
   const { pathname } = new URL(req.url, "http://localhost");
@@ -47,6 +79,13 @@ export async function handleKiteApi(req, res, { sessions, allowedOrigins = [] })
     const jar = sessions.jarFor(req);
     const body = await readBody(req, 8192);
     if (page && jar && body && jar.set(body.trim(), page, { fromScript: true })) sessions.changed();
+    return send(res, 204), true;
+  }
+
+  if (pathname === "/__kite/log") {
+    if (req.method !== "POST" || req.headers["sec-fetch-site"] !== "same-origin") return send(res, 403), true;
+    const body = await readBody(req, 8192);
+    if (body) printPageLog(body);
     return send(res, 204), true;
   }
 

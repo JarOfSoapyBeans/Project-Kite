@@ -457,8 +457,14 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
   }
   function navigateTo(v, replace) {
     var target = wrap(String(v)); // Kite address (or "#hash", "javascript:" unchanged)
-    if (replace) realLocation.replace(target);
-    else realLocation.assign(target);
+    if (String(target).charAt(0) === "#") return replace ? realLocation.replace(target) : realLocation.assign(target);
+    kiteLog("navigate", (replace ? "replace with " : "go to ") + unwrap(target) + stackHere());
+    // Let cookies the page just set reach the backend first, so the next page
+    // load sees them (sites like YouTube set a cookie, then reload).
+    afterCookies(function () {
+      if (replace) realLocation.replace(target);
+      else realLocation.assign(target);
+    });
   }
 
   // A stand-in for window.location / document.location with the real address.
@@ -483,7 +489,10 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
   Object.defineProperties(fakeLocation, {
     assign: { value: function (u) { navigateTo(u); } },
     replace: { value: function (u) { navigateTo(u, true); } },
-    reload: { value: function () { realLocation.reload(); } },
+    reload: { value: function () {
+      kiteLog("navigate", "reload" + stackHere());
+      afterCookies(function () { realLocation.reload(); });
+    } },
     toString: { value: function () { return currentUrl().href; } },
     ancestorOrigins: { get: function () { return { length: 0, item: function () { return null; }, contains: function () { return false; } }; } },
   });
@@ -921,7 +930,8 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
       if (!real) return;
       e.preventDefault();
       var path = proxyPath(real);
-      if (!e.formData) return location.assign(path);
+      kiteLog("navigate", "page navigated to " + real.href + " (" + e.navigationType + ")");
+      if (!e.formData) return afterCookies(function () { location.assign(path); });
       var form = document.createElement("form");
       form.method = "post";
       origSetAttribute.call(form, "action", path);
@@ -1005,13 +1015,71 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
           if (gone) delete cookieView[name];
           else cookieView[name] = first.slice(i + 1).trim();
         }
-        try {
-          if (origBeacon) origBeacon.call(navigator, "/__kite/cookie", new Blob([text], { type: "text/plain" }));
-          else origFetch.call(window, "/__kite/cookie", { method: "POST", body: text, keepalive: true });
-        } catch (e) {}
+        sendCookie(text);
       },
     });
   } catch (e) {}
+
+  // Cookie writes still on their way to the backend. Navigations wait for them
+  // (up to a second) so the next page is loaded with the new cookies.
+  var cookiesPending = 0, cookieWaiters = [];
+  function sendCookie(text) {
+    try {
+      cookiesPending++;
+      var done = function () {
+        if (--cookiesPending > 0) return;
+        var w = cookieWaiters;
+        cookieWaiters = [];
+        w.forEach(function (f) { f(); });
+      };
+      origFetch.call(window, "/__kite/cookie", { method: "POST", body: text, keepalive: true, credentials: "same-origin" }).then(done, done);
+    } catch (e) {
+      cookiesPending = Math.max(0, cookiesPending - 1);
+      try { origBeacon.call(navigator, "/__kite/cookie", new Blob([text], { type: "text/plain" })); } catch (e2) {}
+    }
+  }
+  function afterCookies(go) {
+    if (!cookiesPending) return go();
+    var ran = false;
+    var once = function () { if (!ran) { ran = true; go(); } };
+    cookieWaiters.push(once);
+    setTimeout(once, 1000);
+  }
+
+  // ---------- diagnostics ----------
+  // Errors on the page, and full-page navigations the page starts, are printed
+  // in the "Kite backend" window, so problems can be seen without DevTools.
+  var logCount = 0, logSeen = {};
+  function kiteLog(kind, text) {
+    try {
+      text = String(text).replace(/(?:https?:\/\/[^\s\/]+)?\/proxy\/([A-Za-z0-9_-]{8,})/g, function (m, t) {
+        var d = decode(t);
+        return d ? d.href : m;
+      }).slice(0, 2000);
+      if (logSeen[kind + text] || logCount >= 40) return;
+      logSeen[kind + text] = 1;
+      logCount++;
+      var body = JSON.stringify({ kind: kind, page: current, text: text });
+      if (origBeacon) origBeacon.call(navigator, "/__kite/log", new Blob([body], { type: "text/plain" }));
+      else origFetch.call(window, "/__kite/log", { method: "POST", body: body, keepalive: true });
+    } catch (e) {}
+  }
+  function stackHere() {
+    try {
+      var lines = String(new Error().stack || "").split("\n").slice(3, 8);
+      return lines.length ? "\n" + lines.join("\n") : "";
+    } catch (e) { return ""; }
+  }
+  window.addEventListener("error", function (e) {
+    if (!e || typeof e.message !== "string") return; // a failed image etc., not a script error
+    var where = e.filename ? " (" + e.filename + ":" + e.lineno + ":" + e.colno + ")" : "";
+    var stack = e.error && e.error.stack ? "\n" + String(e.error.stack).split("\n").slice(1, 6).join("\n") : "";
+    kiteLog("error", e.message + where + stack);
+  });
+  window.addEventListener("unhandledrejection", function (e) {
+    var r = e && e.reason;
+    kiteLog("error", "unhandled promise rejection: " + (r && r.stack ? String(r.stack).split("\n").slice(0, 6).join("\n") : String(r)));
+  });
 
   // ---------- Kite UI ----------
 
