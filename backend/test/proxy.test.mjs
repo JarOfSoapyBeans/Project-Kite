@@ -262,3 +262,10 @@ test("default port allow-list blocks odd ports", async () => {
   s.close();
   assert.equal(r.status, 403);
 });
+
+test("responses tell services in front of Kite not to inject scripts", async () => {
+  const page = await get(proxyUrl, P(siteUrl + "/page.html"));
+  assert.match(page.headers.get("cache-control"), /no-transform/);
+  const img = await get(proxyUrl, P(siteUrl + "/i.png"));
+  assert.match(img.headers.get("cache-control"), /no-transform/);
+});

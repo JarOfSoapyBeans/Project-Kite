@@ -310,12 +310,18 @@ function kiteClient(realUrl, origins, initialCookies) {
   var isTab = window.parent !== window && window.parent === window.top;
   var origSetAttribute = Element.prototype.setAttribute;
 
-  // The Kite UI's tab ticket (?__kite_t=...) is only for the backend: take it out
-  // of the address before the page's own scripts can see it.
-  if (/[?&]__kite_t=/.test(location.search)) {
-    var cleaned = location.search.replace(/([?&])__kite_t=[^&]*&?/, "$1").replace(/[?&]$/, "");
-    history.replaceState(history.state, "", location.pathname + cleaned + location.hash);
-  }
+  // Make the tab's address match the page actually shown, before the page's own
+  // scripts run:
+  //  - the backend may have followed redirects for the first load
+  //    (youtube.com -> www.youtube.com); without this the page's later requests
+  //    would be resolved against the old address and go to the wrong site;
+  //  - the Kite UI's tab ticket (?__kite_t=...) is only for the backend.
+  try {
+    var wanted = proxyPath(new URL(realUrl));
+    if (location.pathname + location.search !== wanted) {
+      history.replaceState(history.state, "", wanted + location.hash);
+    }
+  } catch (e) {}
 
   // ---------- URL helpers ----------
 
@@ -776,6 +782,10 @@ function cleanHeaders(headers) {
     if (!DROP_HEADERS.has(k) && !k.startsWith("access-control-")) out[k] = v;
   }
   out["referrer-policy"] = "same-origin"; // keeps the Referer fallback working
+  // Stop services in front of Kite (e.g. Cloudflare analytics, Rocket Loader, email
+  // obfuscation) from injecting their own scripts into pages Kite shows.
+  const cc = String(headers["cache-control"] || "");
+  out["cache-control"] = /no-transform/i.test(cc) ? cc : (cc ? cc + ", " : "") + "no-transform";
   out["x-kite-source"] = "upstream"; // this response came from the website
   return out;
 }
@@ -850,7 +860,7 @@ function decodeText(buf, contentType, isHtml) {
 function sendError(res, status, message) {
   if (res.headersSent) return res.destroy();
   res.setHeader("x-kite-source", "kite"); // visible to the server's error log
-  res.writeHead(status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-kite-source": "kite" });
+  res.writeHead(status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store, no-transform", "x-kite-source": "kite" });
   res.end(
     `<!doctype html><meta charset="utf-8"><title>Kite: ${status}</title>` +
       `<body style="font:16px/1.5 system-ui,sans-serif;padding:2rem;background:#16181d;color:#e6e8ec">` +
@@ -964,7 +974,7 @@ export async function handleProxy(req, res, options = {}) {
       delete headers[h];
     }
     headers["content-type"] = `${isHtml ? "text/html" : "text/css"}; charset=utf-8`;
-    headers["cache-control"] = "no-cache";
+    headers["cache-control"] = "no-cache, no-transform";
     headers["content-length"] = body.length;
     res.writeHead(status, headers);
     res.end(body);
