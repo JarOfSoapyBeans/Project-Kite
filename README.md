@@ -80,37 +80,24 @@ winget install --id Cloudflare.cloudflared
 ```
 
 1. Get the code: `git clone https://github.com/JarOfSoapyBeans/Project-Kite.git`
-2. Edit the settings at the top of `start_home.bat` (`notepad start_home.bat`): set
-   `ALLOWED_ORIGINS` to your Kite frontend's address.
-3. Double-click `start_home.bat` (or run it in Command Prompt). It opens two windows:
-   the backend, and a Cloudflare Tunnel that gives it a public `https://` address.
-4. Give that address to Kite (gear button, or `BACKEND_URL` on Vercel).
+2. Create your tunnel once (needs a domain on Cloudflare):
 
-**A permanent address (recommended).** A quick tunnel gets a new random address every
-time. With a domain on Cloudflare, create a named tunnel once:
+   ```bat
+   cloudflared tunnel login
+   cloudflared tunnel create kite
+   cloudflared tunnel route dns kite kite-api.YOUR-DOMAIN.com
+   ```
 
-```bat
-cloudflared tunnel login
-cloudflared tunnel create kite
-cloudflared tunnel route dns kite kite-api.YOUR-DOMAIN.com
-```
+3. Edit the settings at the top of `start_home.bat` (`notepad start_home.bat`):
+   `TUNNEL_NAME`, `TUNNEL_HOST` (e.g. `kite-api.YOUR-DOMAIN.com`) and `ALLOWED_ORIGINS`.
+4. Double-click `start_home.bat`. It opens the backend, your tunnel and (with
+   `START_FRONTEND=1`) the frontend at http://localhost:3000, then opens Kite.
+   Check `https://kite-api.YOUR-DOMAIN.com/health` shows `ok`.
 
-then set `TUNNEL_NAME=kite` in `start_home.bat`. Your backend is then always at
-`https://kite-api.YOUR-DOMAIN.com`.
-
-If you already have other tunnels, `cloudflared` reads their shared
-`%USERPROFILE%\.cloudflared\config.yml` and Kite's address answers **404**. Give Kite its
-own settings file, `%USERPROFILE%\.cloudflared\kite.yml` (`start_home.bat` uses it
-automatically when `TUNNEL_NAME=kite`); find the ID with `cloudflared tunnel list`:
-
-```yaml
-tunnel: YOUR-TUNNEL-ID
-credentials-file: C:\Users\YOU\.cloudflared\YOUR-TUNNEL-ID.json
-ingress:
-  - hostname: kite-api.YOUR-DOMAIN.com
-    service: http://localhost:8080
-  - service: http_status:404
-```
+`start_home.bat` runs the tunnel with its own settings (`.kite-tunnel.yml`, git-ignored),
+so other tunnels' shared `%USERPROFILE%\.cloudflared\config.yml` can't make Kite's
+address answer 404. To use settings you wrote yourself, put them in
+`%USERPROFILE%\.cloudflared\kite.yml`.
 
 To update later: `git pull`, then restart `start_home.bat`. Your cookies stay in
 `.kite-cookies.json` (git-ignored; it holds your logins, so keep it private).
