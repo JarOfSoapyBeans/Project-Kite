@@ -1254,7 +1254,7 @@ const DROP_HEADERS = new Set([
   "transfer-encoding", "upgrade", "set-cookie", "set-cookie2", "content-security-policy",
   "content-security-policy-report-only", "x-frame-options", "strict-transport-security",
   "clear-site-data", "cross-origin-embedder-policy", "cross-origin-opener-policy",
-  "cross-origin-resource-policy", "report-to", "nel", "link", "refresh", "content-location",
+  "cross-origin-resource-policy", "report-to", "reporting-endpoints", "nel", "link", "refresh", "content-location",
   "alt-svc", "permissions-policy", "feature-policy", "origin-agent-cluster", "referrer-policy",
 ]);
 
@@ -1269,6 +1269,10 @@ function cleanHeaders(headers) {
   const cc = String(headers["cache-control"] || "");
   out["cache-control"] = /no-transform/i.test(cc) ? cc : (cc ? cc + ", " : "") + "no-transform";
   out["x-kite-source"] = "upstream"; // this response came from the website
+  // The browser's own reports (a crashed tab, a blocked feature) come to Kite and
+  // are printed in the backend window, instead of going to the site's relative
+  // report address, which on Kite's address doesn't exist (/web-reports -> 404).
+  out["reporting-endpoints"] = 'default="/__kite/report"';
   return out;
 }
 

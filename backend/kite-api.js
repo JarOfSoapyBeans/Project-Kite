@@ -1,6 +1,7 @@
 // Kite's own endpoints under /__kite/ (Stage 4). No dependencies.
 //
 //   POST /__kite/cookie            document.cookie writes from a proxied page
+//   POST /__kite/report            the browser's reports (e.g. a page crashed), printed
 //   POST /__kite/log               errors and navigations on a proxied page, printed
 //                                  in the backend's window (KITE_PAGE_LOG=0 turns off)
 //   GET  /__kite/cookies           which sites you have cookies for   (Kite UI only)
@@ -61,9 +62,36 @@ function printPageLog(body) {
     const u = new URL(m.page);
     page = u.host + u.pathname + u.search;
   } catch {}
-  const label = m.kind === "navigate" ? "page navigate" : "page error";
+  const label = { navigate: "page navigate", crash: "PAGE CRASH", intervention: "page blocked" }[m.kind] || "page error";
   const lines = clean(m.text, 2000).split("\n").map((l) => l.trim()).filter(Boolean);
   console.log(`[${label}] ${clean(page, 120)}: ${lines[0] || ""}` + lines.slice(1, 8).map((l) => "\n      " + l).join(""));
+}
+
+// Reports the browser sends by itself (Reporting API). Only the ones that explain
+// a broken page are printed: a crashed tab and features the browser blocked.
+function printReports(body) {
+  let list;
+  try {
+    list = JSON.parse(body);
+  } catch {
+    return;
+  }
+  for (const r of Array.isArray(list) ? list : [list]) {
+    if (!r || (r.type !== "crash" && r.type !== "intervention")) continue;
+    let page = "";
+    try {
+      const u = new URL(r.url);
+      const m = /^\/proxy\/([A-Za-z0-9_-]+)/.exec(u.pathname);
+      const real = m ? new URL(Buffer.from(m[1], "base64url").toString("utf8")) : u;
+      page = real.host + real.pathname + (u.search || real.search);
+    } catch {}
+    const b = r.body || {};
+    const text = r.type === "crash"
+      ? `the page crashed (reason: ${b.reason || "unknown"}${b.is_top_level === false ? ", in a frame" : ""})` +
+        (b.stack ? "\n" + b.stack : "")
+      : `${b.message || b.id || "intervention"}${b.sourceFile ? ` (${b.sourceFile}:${b.lineNumber}:${b.columnNumber})` : ""}`;
+    printPageLog(JSON.stringify({ kind: r.type, page: "https://" + page, text }));
+  }
 }
 
 // Returns true if the request was a /__kite/ request (and has been answered).
@@ -79,6 +107,14 @@ export async function handleKiteApi(req, res, { sessions, allowedOrigins = [] })
     const jar = sessions.jarFor(req);
     const body = await readBody(req, 8192);
     if (page && jar && body && jar.set(body.trim(), page, { fromScript: true })) sessions.changed();
+    return send(res, 204), true;
+  }
+
+  if (pathname === "/__kite/report") {
+    if (req.method === "OPTIONS") return send(res, 204), true;
+    if (req.method !== "POST") return send(res, 405), true;
+    const body = await readBody(req, 65536);
+    if (body) printReports(body);
     return send(res, 204), true;
   }
 
