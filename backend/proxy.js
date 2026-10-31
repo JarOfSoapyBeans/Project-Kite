@@ -580,7 +580,10 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
           var v = d.get.call(this);
           try {
             var w = prop === "contentWindow" ? v : v && v.defaultView;
-            if (w && w.Object) installAccessors(w);
+            if (w && w.Object) {
+              installAccessors(w);
+              if (w !== window) patchHistory(w);
+            }
           } catch (e) {}
           return v;
         },
@@ -696,20 +699,33 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
     } catch (e) {}
     return node;
   }
+  // A same-origin iframe gets Kite's patches the moment it's in the page, before
+  // the page can borrow fresh copies of browser functions from it.
+  function fixFrames(node) {
+    try {
+      if (!node || node.nodeType !== 1 && node.nodeType !== 11) return;
+      var frames = node.tagName === "IFRAME" ? [node] : node.firstElementChild ? node.querySelectorAll("iframe") : [];
+      for (var i = 0; i < frames.length; i++) void frames[i].contentWindow; // the hooked getter patches it
+    } catch (e) {}
+  }
   ["appendChild", "insertBefore", "replaceChild"].forEach(function (name) {
     var orig = Node.prototype[name];
     Node.prototype[name] = function (node) {
       fixScript(node);
-      return orig.apply(this, arguments);
+      var result = orig.apply(this, arguments);
+      fixFrames(node);
+      return result;
     };
   });
   ["append", "prepend", "before", "after", "replaceWith"].forEach(function (name) {
-    var proto = name === "append" || name === "prepend" ? Element.prototype : Element.prototype;
+    var proto = Element.prototype;
     var orig = proto[name];
     if (!orig) return;
     proto[name] = function () {
       for (var i = 0; i < arguments.length; i++) fixScript(arguments[i]);
-      return orig.apply(this, arguments);
+      var result = orig.apply(this, arguments);
+      for (var j = 0; j < arguments.length; j++) fixFrames(arguments[j]);
+      return result;
     };
   });
 
@@ -951,22 +967,48 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
 
   // ---------- history: keep the tab on its Kite address ----------
 
-  ["pushState", "replaceState"].forEach(function (name) {
-    var original = history[name];
-    history[name] = function (state, title, url) {
-      if (url !== undefined && url !== null && url !== "") {
-        var real = null;
-        try { real = realOf(url); } catch (e) {}
-        if (real) {
-          current = real.href;
-          url = proxyPath(real);
-        }
-      }
-      var result = original.call(this, state, title, url);
-      report();
-      return result;
-    };
-  });
+  // Patched on History.prototype (not just window.history), and in same-origin
+  // child frames too: YouTube keeps its own copy of the browser's replaceState,
+  // which, given the real address, failed ("A history state object with URL
+  // 'https://www.youtube.com/' cannot be created...") and broke its page changes.
+  var mainHistory = window.history;
+  function patchHistory(win) {
+    try {
+      var proto = win.History && win.History.prototype;
+      if (!proto || proto.__kitePatched) return;
+      Object.defineProperty(proto, "__kitePatched", { value: true });
+      ["pushState", "replaceState"].forEach(function (name) {
+        var original = proto[name];
+        proto[name] = function (state, title, url) {
+          if (this !== mainHistory) return original.apply(this, arguments);
+          if (url !== undefined && url !== null && url !== "") {
+            var real = null;
+            try { real = realOf(url); } catch (e) {}
+            if (real) {
+              current = real.href;
+              url = proxyPath(real);
+            }
+          }
+          var result = original.call(this, state, title, url);
+          report();
+          return result;
+        };
+      });
+    } catch (e) {}
+  }
+  patchHistory(window);
+  // navigation.navigate("/watch?v=...") (Navigation API) goes to the Kite address.
+  try {
+    var NavProto = window.Navigation && Navigation.prototype;
+    if (NavProto && NavProto.navigate) {
+      var origNavigate = NavProto.navigate;
+      NavProto.navigate = function (url) {
+        var args = Array.prototype.slice.call(arguments);
+        if (this === window.navigation) args[0] = wrap(url);
+        return origNavigate.apply(this, args);
+      };
+    }
+  } catch (e) {}
 
   function syncFromLocation() {
     var d = decode(location.pathname.slice(PREFIX.length).split("/")[0]);
