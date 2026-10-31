@@ -11,10 +11,16 @@ import net from "node:net";
 import zlib from "node:zlib";
 import { promisify } from "node:util";
 import { requestContext } from "./cookies.js";
+import { kiteRenamer, rewriteJs } from "./jsrewrite.js";
 
 export const PREFIX = "/proxy/";
 export const TICKET_PARAM = "__kite_t"; // the Kite UI's tab ticket; never sent to sites
 const MAX_BODY = 10 * 1024 * 1024; // largest HTML/CSS we will rewrite, and largest upload
+const MAX_SCRIPT = 40 * 1024 * 1024; // largest script we will rewrite (Stage 5)
+
+// Scripts are rewritten (Stage 5) when the browser loads them to run them.
+const SCRIPT_DESTS = new Set(["script", "worker", "sharedworker", "audioworklet", "paintworklet"]);
+const JS_TYPE = /^(?:application|text)\/(?:x-)?(?:javascript|ecmascript|jscript)\b|^application\/(?:x-)?module\b/;
 const TIMEOUT_MS = 30_000;
 // Node refuses responses whose headers exceed 16 KB by default (HPE_HEADER_OVERFLOW).
 // Big sites (YouTube, Google) send far more: dozens of cookies, long policies.
@@ -256,7 +262,9 @@ function rewriteTag(name, attrStr, state) {
     let nv = null; // new (decoded) value, or null to keep the original
     if (n === "integrity" || n === "referrerpolicy") continue;
     if (n === "target" && /^_(blank|top|parent)$/i.test(dv.trim())) continue; // keep pages inside the tab
-    if (URL_ATTRS.has(n) || (n === "data" && tag === "object")) nv = rewriteUrl(dv, state.base);
+    if (/^on[a-z]+$/.test(n)) nv = rewriteJs(dv, { asFunctionBody: true }); // onclick="location.href=..."
+    else if (n === "href" && /^\s*javascript:/i.test(dv)) nv = dv.replace(/^(\s*javascript:)([\s\S]*)$/i, (m, a, b) => a + rewriteJs(b));
+    else if (URL_ATTRS.has(n) || (n === "data" && tag === "object")) nv = rewriteUrl(dv, state.base);
     else if (n === "srcset" || n === "imagesrcset") nv = rewriteSrcset(dv, state.base);
     else if (n === "style") nv = rewriteCss(dv, state.base);
     else if (n === "ping") nv = dv.split(/\s+/).filter(Boolean).map((u) => rewriteUrl(u, state.base)).join(" ");
@@ -272,19 +280,31 @@ function rewriteTag(name, attrStr, state) {
 // Comments | <script>/<style> with their contents | any other start tag
 const SCAN = /<!--[\s\S]*?-->|<(script|style)\b((?:"[^"]*"|'[^']*'|[^>"'])*)>([\s\S]*?)<\/\1\s*>|<([a-zA-Z][\w:-]*)((?:"[^"]*"|'[^']*'|[^>"'])*)>/gi;
 
+// Inline <script> code is rewritten like script files (Stage 5); data blocks
+// (JSON, templates, import maps) are left alone.
+function rewriteInlineScript(attrs, body) {
+  if (/\bsrc\s*=/i.test(attrs) || !body.trim()) return body;
+  const m = /\btype\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(attrs);
+  const type = (m ? m[1] ?? m[2] ?? m[3] : "").trim().toLowerCase();
+  if (type && !/^(?:module|(?:text|application)\/(?:x-)?(?:javascript|ecmascript|jscript))\b/.test(type)) return body;
+  return rewriteJs(body);
+}
+
 export function rewriteHtml(html, pageUrl, { allowedOrigins = [], scriptCookies = "" } = {}) {
   const state = { base: pageUrl };
   let out = html.replace(SCAN, (m, sName, sAttrs, sBody, tName, tAttrs) => {
     if (m.startsWith("<!--")) return m;
     if (sName) {
-      const body = sName.toLowerCase() === "style" ? rewriteCss(sBody, state.base) : sBody;
+      const body = sName.toLowerCase() === "style" ? rewriteCss(sBody, state.base) : rewriteInlineScript(sAttrs, sBody);
       return rewriteTag(sName, sAttrs, state) + body + `</${sName}>`;
     }
     return rewriteTag(tName, tAttrs, state);
   });
 
   const json = (v) => JSON.stringify(v).replace(/</g, "\\u003c");
-  const inject = `<script data-kite>(${kiteClient.toString()})(${json(pageUrl)},${json(allowedOrigins)},${json(scriptCookies)});</script>`;
+  const inject =
+    `<script data-kite>(${kiteClient.toString()})(${json(pageUrl)},${json(allowedOrigins)},${json(scriptCookies)},` +
+    `${kiteRenamer.toString()});</script>`;
   const head = /<head\b[^>]*>/i.exec(out);
   const at = head ? head.index + head[0].length : /^\s*(?:<!doctype[^>]*>)?/i.exec(out)[0].length;
   return out.slice(0, at) + inject + out.slice(at);
@@ -300,15 +320,22 @@ export function rewriteHtml(html, pageUrl, { allowedOrigins = [], scriptCookies 
 //  - history.pushState/replaceState, so the page keeps its Kite address
 //  - document.cookie (Stage 4): the page sees and sets its own site's cookies,
 //    kept in the backend's cookie jar (never in your real browser)
+//  - the page's view of its own address (Stage 5): scripts are rewritten so
+//    location and top become __kite$location and __kite$top (see jsrewrite.js);
+//    here those return a stand-in with the real address, and the tab pretends
+//    to be the top window
 // It also tells the Kite UI the real URL and title, and lets the UI's
 // back/forward/reload buttons control the tab.
-function kiteClient(realUrl, origins, initialCookies) {
+function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
   if (window.__kite) return;
   window.__kite = true;
   var PREFIX = "/proxy/";
   var current = realUrl;
-  var isTab = window.parent !== window && window.parent === window.top;
+  var realParent = window.parent;
+  var isTab = realParent !== window && realParent === window.top;
+  var realLocation = window.location;
   var origSetAttribute = Element.prototype.setAttribute;
+  var origGetAttribute = Element.prototype.getAttribute;
 
   // Make the tab's address match the page actually shown, before the page's own
   // scripts run:
@@ -407,6 +434,275 @@ function kiteClient(realUrl, origins, initialCookies) {
   function openTab(real) {
     post({ kite: 1, type: "open", url: real.href });
   }
+
+
+  // ---------- the page's view of its own address (Stage 5) ----------
+
+  // Real URL -> the URL as the page would see it without Kite.
+  function unwrap(v) {
+    if (v === null || v === undefined || v === "") return v;
+    try {
+      var u = new URL(String(v), realLocation.href);
+      if (u.origin === realLocation.origin && u.pathname.indexOf(PREFIX) === 0) {
+        var r = realOf(u.href);
+        if (r) return r.href;
+      }
+    } catch (e) {}
+    return v;
+  }
+  function currentUrl() {
+    var u = new URL(current);
+    u.hash = realLocation.hash;
+    return u;
+  }
+  function navigateTo(v, replace) {
+    var target = wrap(String(v)); // Kite address (or "#hash", "javascript:" unchanged)
+    if (replace) realLocation.replace(target);
+    else realLocation.assign(target);
+  }
+
+  // A stand-in for window.location / document.location with the real address.
+  var fakeLocation = Object.create(window.Location ? Location.prototype : Object.prototype);
+  function locationPart(name, setter) {
+    Object.defineProperty(fakeLocation, name, {
+      enumerable: true,
+      get: function () { return currentUrl()[name]; },
+      set: setter || function () {},
+    });
+  }
+  locationPart("href", function (v) { navigateTo(v); });
+  locationPart("origin");
+  locationPart("hash", function (v) { realLocation.hash = v; });
+  ["protocol", "host", "hostname", "port", "pathname", "search"].forEach(function (k) {
+    locationPart(k, function (v) {
+      var u = currentUrl();
+      u[k] = v;
+      navigateTo(u.href);
+    });
+  });
+  Object.defineProperties(fakeLocation, {
+    assign: { value: function (u) { navigateTo(u); } },
+    replace: { value: function (u) { navigateTo(u, true); } },
+    reload: { value: function () { realLocation.reload(); } },
+    toString: { value: function () { return currentUrl().href; } },
+    ancestorOrigins: { get: function () { return { length: 0, item: function () { return null; }, contains: function () { return false; } }; } },
+  });
+  Object.defineProperty(window, "__kite$fakeLocation", { value: fakeLocation, configurable: true });
+
+  // __kite$location and __kite$top on every object (the names rewritten scripts
+  // use). For a window or document they give the stand-in location and pretend
+  // the Kite tab is the top window; for anything else they are plain .location
+  // and .top. Installed into same-origin child frames too (e.g. about:blank).
+  function installAccessors(win) {
+    var OP = win.Object.prototype;
+    if (Object.prototype.hasOwnProperty.call(OP, "__kite$location")) return;
+    function isWin(o) { try { return o !== null && o !== undefined && o.window === o; } catch (e) { return false; } }
+    function isDoc(o) { try { return o !== null && o !== undefined && o.nodeType === 9 && !!o.defaultView; } catch (e) { return false; } }
+    function topOf(w) {
+      var t = w;
+      try {
+        for (var k = 0; k < 50; k++) {
+          var p = t.parent;
+          if (p === t) break;
+          void p.document; // throws when the parent isn't ours (the Kite UI)
+          t = p;
+        }
+      } catch (e) {}
+      return t;
+    }
+    // Code in onclick="..." attributes looks names up on the element (and its form
+    // and document) before the window. A page node without its own .location/.top
+    // is therefore standing in for the window here.
+    function windowFor(o, name) {
+      if (isWin(o)) return o;
+      if (isDoc(o)) return o.defaultView;
+      try {
+        if (o && typeof o === "object" && typeof o.nodeType === "number" && !(name in o)) {
+          var d = o.ownerDocument;
+          return d && d.defaultView;
+        }
+      } catch (e) {}
+      return null;
+    }
+    win.Object.defineProperty(OP, "__kite$location", {
+      configurable: true,
+      get: function () {
+        var w = windowFor(this, "location");
+        if (w) return w.__kite$fakeLocation || w.location;
+        return this.location;
+      },
+      set: function (v) {
+        var w = windowFor(this, "location");
+        if (w) {
+          if (w.__kite$fakeLocation) w.__kite$fakeLocation.href = v;
+          else w.location = v;
+          return;
+        }
+        this.location = v;
+      },
+    });
+    win.Object.defineProperty(OP, "__kite$top", {
+      configurable: true,
+      get: function () {
+        var w = windowFor(this, "top");
+        return w ? topOf(w) : this.top;
+      },
+      set: function (v) { if (!windowFor(this, "top")) this.top = v; },
+    });
+  }
+  installAccessors(window);
+
+  // The tab is the top window as far as the page can tell.
+  if (isTab) {
+    try { Object.defineProperty(window, "parent", { configurable: true, get: function () { return window; } }); } catch (e) {}
+  }
+
+  // Same-origin child frames (about:blank sandboxes and the like) get the accessors too.
+  ["HTMLIFrameElement", "HTMLFrameElement", "HTMLObjectElement"].forEach(function (name) {
+    var C = window[name];
+    if (!C) return;
+    ["contentWindow", "contentDocument"].forEach(function (prop) {
+      var d = Object.getOwnPropertyDescriptor(C.prototype, prop);
+      if (!d || !d.get || !d.configurable) return;
+      Object.defineProperty(C.prototype, prop, {
+        configurable: true,
+        enumerable: d.enumerable,
+        get: function () {
+          var v = d.get.call(this);
+          try {
+            var w = prop === "contentWindow" ? v : v && v.defaultView;
+            if (w && w.Object) installAccessors(w);
+          } catch (e) {}
+          return v;
+        },
+      });
+    });
+  });
+
+  // Other places a page reads its own address.
+  function docGetter(proto, prop, fn) {
+    var d = proto && Object.getOwnPropertyDescriptor(proto, prop);
+    if (!d || !d.get || !d.configurable) return;
+    Object.defineProperty(proto, prop, {
+      configurable: true,
+      enumerable: d.enumerable,
+      get: function () { return this === document ? fn.call(this, d.get) : d.get.call(this); },
+      set: d.set,
+    });
+  }
+  docGetter(Document.prototype, "URL", function () { return currentUrl().href; });
+  docGetter(Document.prototype, "documentURI", function () { return currentUrl().href; });
+  docGetter(Document.prototype, "referrer", function (g) {
+    var r = g.call(this);
+    var u = unwrap(r);
+    return u !== r ? u : ""; // never reveal the Kite UI's address
+  });
+  var domainDesc = Object.getOwnPropertyDescriptor(Document.prototype, "domain");
+  if (domainDesc && domainDesc.configurable) {
+    Object.defineProperty(Document.prototype, "domain", {
+      configurable: true,
+      get: function () { return this === document ? new URL(current).hostname : domainDesc.get.call(this); },
+      set: function () {}, // sites set document.domain = "example.com"; that would throw here
+    });
+  }
+  var baseDesc = Object.getOwnPropertyDescriptor(Node.prototype, "baseURI");
+  if (baseDesc && baseDesc.configurable) {
+    Object.defineProperty(Node.prototype, "baseURI", {
+      configurable: true,
+      get: function () { return unwrap(baseDesc.get.call(this)); },
+    });
+  }
+  try { Object.defineProperty(window, "origin", { configurable: true, get: function () { return new URL(current).origin; } }); } catch (e) {}
+
+  // Links: a.pathname, a.hostname... describe the real link, not the Kite address.
+  [window.HTMLAnchorElement, window.HTMLAreaElement].forEach(function (C) {
+    if (!C) return;
+    ["protocol", "host", "hostname", "port", "pathname", "search", "hash", "origin"].forEach(function (k) {
+      var d = Object.getOwnPropertyDescriptor(C.prototype, k);
+      if (!d || !d.configurable) return;
+      Object.defineProperty(C.prototype, k, {
+        configurable: true,
+        enumerable: d.enumerable,
+        get: function () {
+          var raw = origGetAttribute.call(this, "href");
+          if (raw === null) return d.get.call(this);
+          try { return new URL(unwrap(this.href), current)[k]; } catch (e) { return d.get.call(this); }
+        },
+        set: d.set && function (v) {
+          try {
+            var u = new URL(unwrap(this.href), current);
+            u[k] = v;
+            this.href = u.href;
+          } catch (e) { d.set.call(this, v); }
+        },
+      });
+    });
+  });
+
+  // Code that pages build while running gets the same rewriting as their scripts.
+  var renamer = makeRenamer ? makeRenamer() : null;
+  function rewriteCode(code) {
+    if (!renamer || typeof code !== "string" || !/location|top/.test(code)) return code;
+    try { return renamer.applyEdits(code, renamer.findRenames(code)); } catch (e) { return code; }
+  }
+  var OrigFunction = Function;
+  var KiteFunction = function Function() {
+    var args = Array.prototype.slice.call(arguments);
+    if (args.length) {
+      var body = String(args[args.length - 1]);
+      var rewritten = rewriteCode(body);
+      if (rewritten !== body) {
+        try {
+          return OrigFunction.apply(this, args.slice(0, -1).concat([rewritten]));
+        } catch (e) {} // fall back to the original below
+      }
+    }
+    return OrigFunction.apply(this, args);
+  };
+  KiteFunction.prototype = OrigFunction.prototype;
+  try {
+    Object.defineProperty(OrigFunction.prototype, "constructor", { value: KiteFunction, configurable: true, writable: true });
+    window.Function = KiteFunction;
+  } catch (e) {}
+  ["setTimeout", "setInterval"].forEach(function (name) {
+    var orig = window[name];
+    window[name] = function (handler) {
+      var args = Array.prototype.slice.call(arguments);
+      if (typeof handler === "string") args[0] = rewriteCode(handler);
+      return orig.apply(window, args);
+    };
+  });
+  // <script> elements whose code is set from JavaScript, rewritten as they're inserted.
+  function fixScript(node) {
+    try {
+      if (node && node.nodeType === 1 && node.tagName === "SCRIPT" && !node.hasAttribute("src") && !node.__kiteDone) {
+        var t = (node.getAttribute("type") || "").toLowerCase();
+        if (!t || /javascript|ecmascript|^module$/.test(t)) {
+          node.__kiteDone = true;
+          var code = node.text;
+          var rewritten = rewriteCode(code);
+          if (rewritten !== code) node.text = rewritten;
+        }
+      }
+    } catch (e) {}
+    return node;
+  }
+  ["appendChild", "insertBefore", "replaceChild"].forEach(function (name) {
+    var orig = Node.prototype[name];
+    Node.prototype[name] = function (node) {
+      fixScript(node);
+      return orig.apply(this, arguments);
+    };
+  });
+  ["append", "prepend", "before", "after", "replaceWith"].forEach(function (name) {
+    var proto = name === "append" || name === "prepend" ? Element.prototype : Element.prototype;
+    var orig = proto[name];
+    if (!orig) return;
+    proto[name] = function () {
+      for (var i = 0; i < arguments.length; i++) fixScript(arguments[i]);
+      return orig.apply(this, arguments);
+    };
+  });
 
   // ---------- network requests ----------
 
@@ -509,7 +805,8 @@ function kiteClient(realUrl, origins, initialCookies) {
     Object.defineProperty(Ctor.prototype, prop, {
       configurable: true,
       enumerable: d.enumerable,
-      get: d.get,
+      // Reading gives the real URL back (scripts often derive other URLs from it).
+      get: fn === wrap ? function () { return unwrap(d.get.call(this)); } : d.get,
       set: function (v) { d.set.call(this, fn(v)); },
     });
   }
@@ -534,13 +831,19 @@ function kiteClient(realUrl, origins, initialCookies) {
   Element.prototype.setAttribute = function (name, value) {
     return origSetAttribute.call(this, name, fixAttr(this, String(name).toLowerCase(), value));
   };
+  Element.prototype.getAttribute = function (name) {
+    var v = origGetAttribute.call(this, name);
+    var n = String(name).toLowerCase();
+    if (v !== null && URL_ATTRS[n] === 1 && this.namespaceURI === "http://www.w3.org/1999/xhtml") return unwrap(v);
+    return v;
+  };
 
   // Elements added as HTML (innerHTML, insertAdjacentHTML...) never pass through
   // the setters above, so fix their URLs as they arrive.
   var SELECTOR = "img,source,iframe,frame,embed,object,video,audio,track,link,a,area,form,input";
   function fixElement(el) {
     for (var name in URL_ATTRS) {
-      var v = el.getAttribute(name);
+      var v = origGetAttribute.call(el, name);
       if (v === null) continue;
       var nv = fixAttr(el, name, v);
       if (nv !== v) origSetAttribute.call(el, name, nv);
@@ -580,13 +883,13 @@ function kiteClient(realUrl, origins, initialCookies) {
     if (e.defaultPrevented || e.button !== 0) return;
     var a = e.target && e.target.closest ? e.target.closest("a[href],area[href]") : null;
     if (!a || a.hasAttribute("download")) return;
-    var href = a.getAttribute("href");
+    var href = origGetAttribute.call(a, "href");
     if (!href || href.charAt(0) === "#") return;
     var real = null;
     try { real = realOf(href); } catch (err) {}
     if (!real) return;
-    var newTab = (a.getAttribute("target") || "").toLowerCase() === "_blank" || e.ctrlKey || e.metaKey || e.shiftKey;
-    var offsite = new URL(a.href, location.href).origin !== location.origin;
+    var newTab = (origGetAttribute.call(a, "target") || "").toLowerCase() === "_blank" || e.ctrlKey || e.metaKey || e.shiftKey;
+    var offsite = new URL(href, location.href).origin !== location.origin;
     if (!newTab && !offsite) return;
     e.preventDefault();
     if (newTab) openTab(real);
@@ -597,7 +900,7 @@ function kiteClient(realUrl, origins, initialCookies) {
   window.addEventListener("submit", function (e) {
     var f = e.target;
     if (!f || f.tagName !== "FORM") return;
-    var act = f.getAttribute("action");
+    var act = origGetAttribute.call(f, "action");
     if (act) {
       var w = wrap(act);
       if (w !== act) origSetAttribute.call(f, "action", w);
@@ -718,12 +1021,117 @@ function kiteClient(realUrl, origins, initialCookies) {
     window.addEventListener("load", report);
   }
   window.addEventListener("message", function (e) {
-    if (e.source !== window.parent) return;
+    if (e.source !== realParent) return;
     var d = e.data;
     if (!d || d.kite !== 1) return;
     if (d.cmd === "back") history.back();
     else if (d.cmd === "forward") history.forward();
     else if (d.cmd === "reload") location.reload();
+  });
+}
+
+// Runs at the start of every Web Worker a proxied page starts (Stage 5). Workers
+// don't get the page's injected script, so this gives them the same essentials:
+// requests go through Kite, and the renamed names (__kite$location, __kite$top)
+// work and report the real address.
+function kiteWorkerClient() {
+  if (self.__kite) return;
+  self.__kite = true;
+  var PREFIX = "/proxy/";
+  var realLocation = self.location;
+  function encode(url) {
+    var bytes = new TextEncoder().encode(url);
+    var bin = "";
+    for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+  function decode(token) {
+    try {
+      var bin = atob(token.replace(/-/g, "+").replace(/_/g, "/"));
+      var bytes = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      var u = new URL(new TextDecoder().decode(bytes));
+      return u.protocol === "http:" || u.protocol === "https:" ? u : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  var me = decode(realLocation.pathname.slice(PREFIX.length).split("/")[0]);
+  var current = me ? me.href : realLocation.href;
+  function wrap(url) {
+    try {
+      var s = String(url);
+      if (s.indexOf(PREFIX) === 0 || /^(?:data|blob):/i.test(s)) return url;
+      var u = new URL(s, current);
+      if (u.origin === realLocation.origin && u.pathname.indexOf(PREFIX) === 0) return u.href;
+      if (u.protocol !== "http:" && u.protocol !== "https:") return url;
+      var hash = u.hash;
+      u.hash = "";
+      return realLocation.origin + PREFIX + encode(u.href) + hash;
+    } catch (e) {
+      return url;
+    }
+  }
+  if (self.fetch) {
+    var origFetch = self.fetch;
+    self.fetch = function (input, init) {
+      try {
+        if (typeof Request !== "undefined" && input instanceof Request) {
+          var w = wrap(input.url);
+          if (w !== input.url) input = new Request(w, input);
+        } else input = wrap(input);
+      } catch (e) {}
+      return origFetch.call(self, input, init);
+    };
+  }
+  if (self.XMLHttpRequest) {
+    var origOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (method, url) {
+      var args = Array.prototype.slice.call(arguments);
+      if (args.length > 1) args[1] = wrap(url);
+      return origOpen.apply(this, args);
+    };
+  }
+  if (self.importScripts) {
+    var origImport = self.importScripts;
+    self.importScripts = function () {
+      return origImport.apply(self, Array.prototype.map.call(arguments, wrap));
+    };
+  }
+  if (self.WebSocket) {
+    var OrigWS = self.WebSocket;
+    var KiteWS = function (url, protocols) {
+      var relay = url;
+      try {
+        var u = new URL(String(url), current);
+        if (u.protocol === "http:") u.protocol = "ws:";
+        else if (u.protocol === "https:") u.protocol = "wss:";
+        if (u.protocol === "ws:" || u.protocol === "wss:") {
+          u.hash = "";
+          relay = (realLocation.protocol === "https:" ? "wss://" : "ws://") + realLocation.host + "/ws/" +
+            encode(u.href) + "/" + encode(new URL(current).origin);
+        }
+      } catch (e) {}
+      return protocols === undefined ? new OrigWS(relay) : new OrigWS(relay, protocols);
+    };
+    KiteWS.prototype = OrigWS.prototype;
+    ["CONNECTING", "OPEN", "CLOSING", "CLOSED"].forEach(function (k) { KiteWS[k] = OrigWS[k]; });
+    self.WebSocket = KiteWS;
+  }
+  var fake = {};
+  ["href", "origin", "protocol", "host", "hostname", "port", "pathname", "search", "hash"].forEach(function (k) {
+    Object.defineProperty(fake, k, { enumerable: true, get: function () { return new URL(current)[k]; } });
+  });
+  fake.toString = function () { return current; };
+  Object.defineProperty(Object.prototype, "__kite$location", {
+    configurable: true,
+    get: function () { return this === self ? fake : this.location; },
+    set: function (v) { if (this !== self) this.location = v; },
+  });
+  Object.defineProperty(Object.prototype, "__kite$top", {
+    configurable: true,
+    get: function () { return this.top; },
+    set: function (v) { this.top = v; },
   });
 }
 
@@ -751,6 +1159,12 @@ function upstreamHeaders(req, target, o = {}) {
   }
   const page = sourcePage(req);
   const dest = req.headers["sec-fetch-dest"];
+  // Scripts are rewritten, so the browser's cached copy (perhaps from before
+  // rewriting) must not be revalidated with a "304 Not Modified".
+  if (!dest || SCRIPT_DESTS.has(dest)) {
+    delete h["if-none-match"];
+    delete h["if-modified-since"];
+  }
   if (dest) h["sec-fetch-dest"] = dest === "iframe" && !page ? "document" : dest; // a Kite tab is a normal page to the site
   if (page) {
     const same = page.origin === target.origin;
@@ -953,8 +1367,10 @@ export async function handleProxy(req, res, options = {}) {
     const type = String(up.headers["content-type"] || "").toLowerCase();
     const isHtml = /^(text\/html|application\/xhtml\+xml)\b/.test(type);
     const isCss = /^text\/css\b/.test(type);
+    const dest = req.headers["sec-fetch-dest"];
+    const isScript = JS_TYPE.test(type) && (!dest || SCRIPT_DESTS.has(dest));
 
-    if ((!isHtml && !isCss) || req.method === "HEAD" || status === 204 || status === 304) {
+    if ((!isHtml && !isCss && !isScript) || req.method === "HEAD" || status === 204 || status === 304) {
       // Images, scripts, fonts, video...: stream through untouched.
       res.writeHead(status, headers);
       up.on("error", () => res.destroy());
@@ -962,18 +1378,23 @@ export async function handleProxy(req, res, options = {}) {
       return up.pipe(res);
     }
 
-    const raw = await readLimited(up, MAX_BODY);
+    const raw = await readLimited(up, isScript ? MAX_SCRIPT : MAX_BODY);
     const text = decodeText(await decodeBody(raw, up.headers["content-encoding"]), type, isHtml);
-    const body = Buffer.from(
-      isHtml
-        ? rewriteHtml(text, target, { allowedOrigins: o.allowedOrigins, scriptCookies: o.jar ? o.jar.scriptCookies(target) : "" })
-        : rewriteCss(text, target),
-      "utf8"
-    );
+    let out;
+    if (isHtml) {
+      out = rewriteHtml(text, target, { allowedOrigins: o.allowedOrigins, scriptCookies: o.jar ? o.jar.scriptCookies(target) : "" });
+    } else if (isScript) {
+      out = rewriteJs(text);
+      // Workers don't get the page's injected script, so they get their own.
+      if (dest === "worker" || dest === "sharedworker") out = `(${kiteWorkerClient.toString()})();\n` + out;
+    } else {
+      out = rewriteCss(text, target);
+    }
+    const body = Buffer.from(out, "utf8");
     for (const h of ["content-encoding", "content-length", "etag", "last-modified", "accept-ranges", "content-range"]) {
       delete headers[h];
     }
-    headers["content-type"] = `${isHtml ? "text/html" : "text/css"}; charset=utf-8`;
+    headers["content-type"] = `${isHtml ? "text/html" : isScript ? type.split(";")[0].trim() : "text/css"}; charset=utf-8`;
     headers["cache-control"] = "no-cache, no-transform";
     headers["content-length"] = body.length;
     res.writeHead(status, headers);

@@ -116,7 +116,13 @@ To update later: `git pull`, then restart `start_home.bat`. Your cookies stay in
    page's own JavaScript builds (`fetch`, XHR, `img.src`, `location.href = ...`,
    `window.open`...) and sends them through Kite too. It also tells the Kite UI the
    page's real address and title.
-6. Anything that still slips past is caught on the server using the Referer header.
+6. Scripts are rewritten as they pass through (Stage 5): `location` and `top` become
+   `__kite$location` and `__kite$top`, which the injected script answers with the page's
+   real address, so `location.pathname` is `/watch`, not `/proxy/...`. Only real code is
+   touched (never strings, comments, regexes or object keys); the rewriter was checked
+   against a full JavaScript parser on 745 real-world libraries (217 MB, no differences),
+   and if a rewritten script ever fails to parse, the original is used.
+7. Anything that still slips past is caught on the server using the Referer header.
 
 ## Roadmap
 
@@ -127,7 +133,9 @@ To update later: `git pull`, then restart `start_home.bat`. Your cookies stay in
 - [x] **Stage 4:** cookies: one private cookie jar per person, kept on the backend
   (`backend/cookies.js`, `sessions.js`, `kite-api.js`), `document.cookie` in pages,
   and a cookie manager (the cookie button in the toolbar)
-- [ ] **Stage 5:** JavaScript rewriting (needed for Google, YouTube, logins)
+- [x] **Stage 5:** JavaScript rewriting (`backend/jsrewrite.js`): pages see their real
+  address (`location`, `document.URL`, links' `.pathname`...) and the Kite tab looks like the
+  top window, so single-page apps like YouTube route correctly
 
 Right now, most ordinary sites work, including live updates over WebSockets and staying
 signed in. The very hardest sites (Google, YouTube) need Stage 5, and some sign-in pages
