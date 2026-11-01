@@ -66,7 +66,7 @@ function idOfWindow(win) {
 
 const platform = {
   kind: "web",
-  features: { accounts: true, cookies: true, popout: true, backendSettings: true },
+  features: { accounts: true, cookies: true, popout: true, backendSettings: true, menu: true },
 
   start(ev) {
     events = ev;
@@ -153,6 +153,30 @@ const platform = {
     } catch {
       w.postMessage({ kite: 1, cmd }, backendOrigin());
     }
+  },
+
+  // History, bookmarks, settings...: kept in this browser for now.
+  async loadData(name) {
+    try {
+      return JSON.parse(localStorage.getItem("kite:" + name) || "null");
+    } catch {
+      return null;
+    }
+  },
+  async saveData(name, value) {
+    try {
+      localStorage.setItem("kite:" + name, JSON.stringify(value));
+    } catch {} // full or blocked: keep going without saving
+  },
+  // Other Kite Web tabs in this browser changed something.
+  onDataChanged(fn) {
+    window.addEventListener("storage", (e) => {
+      if (e.key && e.key.startsWith("kite:")) {
+        try {
+          fn(e.key.slice(5), JSON.parse(e.newValue || "null"));
+        } catch {}
+      }
+    });
   },
 
   // Open the page outside Kite's frame, in a real browser window (still through

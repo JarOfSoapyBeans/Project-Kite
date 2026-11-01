@@ -4,6 +4,7 @@
 
 const bridge = window.kiteDesktop;
 let events = null;
+let dataListener = null;
 
 const platform = {
   kind: "desktop",
@@ -12,7 +13,7 @@ const platform = {
     accounts: false, cookies: false, popout: false, backendSettings: false,
     // the app
     siteInfo: true, permissions: true, find: true, zoom: true, print: true,
-    downloads: true, profiles: true, windows: true, appMenu: true, tabMenu: true,
+    downloads: true, profiles: true, windows: true, menu: true, appMenu: true, tabMenu: true, favicons: true,
   },
 
   start(ev) {
@@ -29,6 +30,7 @@ const platform = {
         case "permission": return events.permission(e.request);
         case "permission-done": return events.permissionDone(e.id);
         case "downloads": return events.downloads(e.list || []);
+        case "data": return dataListener && dataListener(e.name, e.value);
       }
     });
     // Tabs go under the toolbar: tell the app how tall it is, now and whenever
@@ -37,7 +39,7 @@ const platform = {
     const report = () => bridge.setInset(Math.ceil(chrome.getBoundingClientRect().height));
     new ResizeObserver(report).observe(chrome);
     report();
-    document.getElementById("views").hidden = true; // pages are drawn by the app, not here
+    // Websites are drawn by the app over this area; Kite's own pages are drawn here.
   },
 
   createView: (id) => bridge.createView(id),
@@ -50,6 +52,11 @@ const platform = {
   focusUi: () => bridge.focusUi(),
   popout() {},
   startUrls: () => bridge.startUrls(),
+  // History, bookmarks, settings...: kept in your profile's folder by the app
+  // (guest windows: in memory), shared by the profile's windows.
+  loadData: (name) => bridge.loadData(name),
+  saveData: (name, value) => bridge.saveData(name, value),
+  onDataChanged: (fn) => (dataListener = fn),
 
   find: (id, text, opts) => bridge.find(id, text, opts),
   stopFind: (id) => bridge.stopFind(id),

@@ -319,3 +319,39 @@ test("downloads reach the profile's windows; actions only for that profile", asy
   assert.equal(await call("downloads:action", [list[0].id, "show"]), true);
   assert.equal(S.external.at(-1), "show:" + path.join(S.paths.downloads, "kite.zip"));
 });
+
+test("history, bookmarks, settings: saved per profile, shared with its windows, guests in memory", async () => {
+  assert.equal(await call("data:load", ["bookmarks"]), null);
+  assert.equal(await call("data:save", ["bookmarks", [{ id: "a", url: "https://a.test/", title: "A" }]]), true);
+  assert.deepEqual(await call("data:load", ["bookmarks"]), [{ id: "a", url: "https://a.test/", title: "A" }]);
+  assert.ok(fs.existsSync(path.join(S.paths.userData, "profile-data", "main", "bookmarks.json")));
+  assert.equal(await call("data:save", ["../../evil", "x"]), false, "only Kite's own kinds of data");
+  assert.equal(await call("data:load", ["../profiles"]), null);
+  // another window of the same profile hears about it
+  const before = S.windows.length;
+  await call("window:new", []);
+  const second = S.windows[before];
+  second.webContents.url = "kite://app/index.html";
+  await call("data:save", ["settings", { searchEngine: "google" }]);
+  assert.ok(second.webContents.sent.some(([, e]) => e.type === "data" && e.name === "settings" && e.value.searchEngine === "google"));
+  // a guest window: separate, in memory, gone when closed
+  await call("window:guest", []);
+  const guest = S.windows.at(-1);
+  guest.webContents.url = "kite://app/index.html";
+  const g = (name, args) => S.ipcHandle[name]({ sender: guest.webContents, senderFrame: guest.webContents.mainFrame }, ...args);
+  assert.equal(await g("data:load", ["bookmarks"]), null, "guests don't see the profile's bookmarks");
+  await g("data:save", ["history", [{ url: "https://secret.test/", time: 1 }]]);
+  assert.deepEqual(await g("data:load", ["history"]), [{ url: "https://secret.test/", time: 1 }]);
+  const files = fs.readdirSync(path.join(S.paths.userData, "profile-data"));
+  assert.ok(!files.some((f) => f.startsWith("guest")), "nothing written to disk");
+  guest.close();
+});
+
+test("new shortcuts from inside a page: history, bookmark, bookmarks bar, home", () => {
+  const press = (input) => main.shortcutFor({ type: "keyDown", ...input });
+  assert.equal(press({ key: "h", control: true }), "history");
+  assert.equal(press({ key: "d", control: true }), "bookmark");
+  assert.equal(press({ key: "B", control: true, shift: true }), "bookmarks-bar");
+  assert.equal(press({ key: "O", control: true, shift: true }), "bookmarks");
+  assert.equal(press({ key: "Home", alt: true }), "home");
+});

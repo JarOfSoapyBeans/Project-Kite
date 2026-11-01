@@ -27,7 +27,9 @@ interface:
 shared/            the browser interface and logic, written once
   ui/              tabs, toolbar, address bar, new tab page (index.html, app.js, ...)
                    features.js: padlock, permissions, find, zoom, downloads, profiles, menus
-  lib/             shared logic (omnibox.js: address or search?)
+                   pages.js: new tab, history, bookmarks, settings; store.js: their data
+  lib/             shared logic (omnibox.js: address or search?; data.js: history,
+                   bookmarks, shortcuts, settings)
   platform/        how tabs work where Kite runs:
     web.js           Kite Web: each tab is an iframe through the backend
     web-panels.js    Kite Web only: accounts, cookie jar, backend address
@@ -67,6 +69,19 @@ no backend and no rewriting. What the app has:
   the ⋮ menu. F12 opens DevTools for the page.
 - Kite's own **error page** when a site can't be reached, and no way past an
   invalid security certificate.
+
+### Kite's own pages (the app and Kite Web)
+
+- **New tab page**: search box and shortcuts (your most visited sites, or your own).
+- **History** (`kite://history`, Ctrl+H): by day, searchable, remove or clear.
+- **Bookmarks**: the ☆ in the address bar or Ctrl+D, the bookmarks bar
+  (Ctrl+Shift+B), and `kite://bookmarks` (Ctrl+Shift+O) to edit and reorder.
+- **Settings** (`kite://settings`): search engine (Bing, Google, DuckDuckGo),
+  home page and button, what opens at startup (including last time's tabs),
+  bookmarks bar, keeping history.
+
+The app keeps these per profile (`profile-data` in its folder; guest windows keep
+nothing). Kite Web keeps them in the browser you use it in.
 
 Where the app keeps things: `%APPDATA%\kite-desktop` on Windows (profiles.json,
 permissions-*.json and the profiles' browser data).

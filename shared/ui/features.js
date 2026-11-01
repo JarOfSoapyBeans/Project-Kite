@@ -21,12 +21,15 @@ export function initFeatures(kite) {
 
   // ---------- panels under the toolbar (one at a time) ----------
 
-  const panels = ["downloads-panel", "site-panel", "profile-panel"].map($);
+  const panels = ["downloads-panel", "site-panel", "profile-panel", "bookmark-panel", "menu-panel"].map($);
   function openPanel(panel, open = panel.hidden) {
     for (const p of panels) p.hidden = p === panel ? !open : true;
     return open;
   }
-  for (const p of panels) p.querySelector("[data-close]").addEventListener("click", () => (p.hidden = true));
+  for (const p of panels) {
+    const x = p.querySelector("[data-close]");
+    if (x) x.addEventListener("click", () => (p.hidden = true));
+  }
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") for (const p of panels) p.hidden = true;
   });
@@ -70,7 +73,7 @@ export function initFeatures(kite) {
     siteBtn.addEventListener("click", async () => {
       const tab = kite.activeTab();
       if (!tab || !openPanel($("site-panel"))) return;
-      renderSite(await platform.siteInfo(tab.id));
+      renderSite(tab.page || !tab.url ? { security: "kite" } : await platform.siteInfo(tab.id));
     });
     $("site-reset").addEventListener("click", async () => {
       const tab = kite.activeTab();
@@ -118,7 +121,7 @@ export function initFeatures(kite) {
   let findTab = null;
   function openFind() {
     const tab = kite.activeTab();
-    if (!has("find") || !tab || !tab.url) return;
+    if (!has("find") || !tab || !tab.url || tab.page) return;
     findTab = tab.id;
     findBar.hidden = false;
     kite.focusUi();
@@ -161,7 +164,7 @@ export function initFeatures(kite) {
     zoomBadge.hidden = !has("zoom") || z === 100;
     zoomBadge.textContent = z + "%";
   }
-  const zoom = (dir) => has("zoom") && kite.activeTab() && platform.zoom(kite.activeTab().id, dir);
+  const zoom = (dir) => has("zoom") && kite.activeTab() && !kite.activeTab().page && platform.zoom(kite.activeTab().id, dir);
   zoomBadge.addEventListener("click", () => zoom("reset"));
 
   // ---------- downloads ----------
@@ -265,19 +268,31 @@ export function initFeatures(kite) {
     "zoom-in": () => zoom("in"),
     "zoom-out": () => zoom("out"),
     "zoom-reset": () => zoom("reset"),
-    print: () => has("print") && kite.activeTab() && platform.command(kite.activeTab().id, "print"),
-    pdf: () => has("print") && kite.activeTab() && platform.savePdf(kite.activeTab().id),
+    print: () => has("print") && kite.activeTab() && !kite.activeTab().page && platform.command(kite.activeTab().id, "print"),
+    pdf: () => has("print") && kite.activeTab() && !kite.activeTab().page && platform.savePdf(kite.activeTab().id),
     downloads: toggleDownloads,
     profiles: () => has("profiles") && openPanel($("profile-panel"), true) && renderProfiles(),
     "new-window": () => has("windows") && platform.newWindow(),
     "guest-window": () => has("windows") && platform.guestWindow(),
     "new-tab": () => kite.createTab(),
   };
+  // Anything else the menus pick (history, bookmarks, settings...) app.js does.
+  const run = (chosen) => (actions[chosen] ? actions[chosen]() : kite.run(chosen));
   if (has("appMenu")) {
+    // The app: a real system menu.
     $("menu").addEventListener("click", async () => {
       const chosen = await platform.appMenu();
-      if (chosen && actions[chosen]) actions[chosen]();
+      if (chosen) run(chosen);
     });
+  } else if (has("menu")) {
+    // Kite Web: the same menu, as a panel under the toolbar.
+    $("menu").addEventListener("click", () => openPanel($("menu-panel")));
+    for (const b of $("menu-panel").querySelectorAll("[data-action]")) {
+      b.addEventListener("click", () => {
+        $("menu-panel").hidden = true;
+        run(b.dataset.action);
+      });
+    }
   }
 
   // The menu on a tab (right-click).
@@ -335,6 +350,7 @@ export function initFeatures(kite) {
       showQuestion();
     },
     downloads: renderDownloads,
-    search: (text) => kite.createTab(searchUrl(text)),
+    search: (text) => kite.createTab(searchUrl(text, kite.searchEngine())),
+    openPanel,
   };
 }

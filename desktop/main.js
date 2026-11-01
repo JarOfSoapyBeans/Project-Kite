@@ -92,6 +92,8 @@ function shortcutFor(input) {
   if (mod && key === "tab") return "next-tab";
   if (mod && input.shift && key === "t") return "reopen-tab";
   if (mod && input.shift && key === "n") return "guest-window";
+  if (mod && input.shift && key === "b") return "bookmarks-bar";
+  if (mod && input.shift && key === "o") return "bookmarks";
   if (mod && key === "t") return "new-tab";
   if (mod && key === "n") return "new-window";
   if (mod && key === "w") return "close-tab";
@@ -99,6 +101,9 @@ function shortcutFor(input) {
   if (mod && key === "f") return "find";
   if (mod && key === "p") return "print";
   if (mod && key === "j") return "downloads";
+  if (mod && key === "h") return "history";
+  if (mod && key === "d") return "bookmark";
+  if (input.alt && key === "home") return "home";
   if (mod && (key === "=" || key === "+")) return "zoom-in";
   if (mod && key === "-") return "zoom-out";
   if (mod && key === "0") return "zoom-reset";
@@ -208,6 +213,7 @@ class KiteWindow {
       if (this.profile.guest && ![...windows].some((w) => w.profile.id === this.profile.id)) {
         this.ses.clearStorageData().catch(() => {}); // a guest leaves nothing behind
         permsByProfile.delete(this.profile.id);
+        guestData.delete(this.profile.id);
       }
     });
     win.loadURL(UI_URL);
@@ -325,7 +331,7 @@ class KiteWindow {
       if (!name) return;
       event.preventDefault();
       if (!this.windowShortcut(name, id)) {
-        if (name === "focus-address" || name === "new-tab" || name === "find") this.win.webContents.focus();
+        if (["focus-address", "new-tab", "find", "bookmark"].includes(name)) this.win.webContents.focus();
         this.send({ type: "shortcut", name });
       }
     });
@@ -492,6 +498,47 @@ class KiteWindow {
   }
 }
 
+// ---------- history, bookmarks, settings... (per profile) ----------
+
+// Saved by the interface (see shared/ui/store.js). Kept in
+// <userData>/profile-data/<profile>/<name>.json; guests' only in memory.
+const DATA_NAMES = new Set(["history", "bookmarks", "shortcuts", "settings", "session"]);
+const MAX_DATA = 8 * 1024 * 1024;
+const guestData = new Map(); // guest profile id -> Map(name -> value)
+
+function dataFile(profileId, name) {
+  return path.join(app.getPath("userData"), "profile-data", profileId, name + ".json");
+}
+
+function loadData(profile, name) {
+  if (!DATA_NAMES.has(name)) return null;
+  if (profile.guest) return (guestData.get(profile.id) || new Map()).get(name) ?? null;
+  try {
+    return JSON.parse(fs.readFileSync(dataFile(profile.id, name), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function saveData(kw, name, value) {
+  if (!DATA_NAMES.has(name)) return false;
+  const text = JSON.stringify(value ?? null);
+  if (text.length > MAX_DATA) return false;
+  const profile = kw.profile;
+  if (profile.guest) {
+    if (!guestData.has(profile.id)) guestData.set(profile.id, new Map());
+    guestData.get(profile.id).set(name, JSON.parse(text));
+  } else {
+    const file = dataFile(profile.id, name);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file + ".tmp", text);
+    fs.renameSync(file + ".tmp", file);
+  }
+  // The profile's other windows see the change.
+  for (const w of windows) if (w !== kw && w.profile.id === profile.id) w.send({ type: "data", name, value: JSON.parse(text) });
+  return true;
+}
+
 // ---------- the interface's requests ----------
 
 // Only Kite's own interface (the top page of a Kite window) may drive the tabs.
@@ -559,6 +606,7 @@ function wireIpc() {
     await session.fromPartition(profiles.partitionFor(id)).clearStorageData().catch(() => {});
     permsByProfile.delete(id);
     fs.rmSync(path.join(app.getPath("userData"), `permissions-${id}.json`), { force: true });
+    fs.rmSync(path.join(app.getPath("userData"), "profile-data", id), { recursive: true, force: true });
     return true;
   });
   on("profiles:open", (_kw, id) => openProfile(String(id)));
@@ -569,6 +617,8 @@ function wireIpc() {
     kw.startUrls = [];
     return urls;
   });
+  on("data:load", (kw, name) => loadData(kw.profile, String(name)));
+  on("data:save", (kw, name, value) => saveData(kw, String(name), value));
   on("ui:inset", (kw, px) => {
     kw.inset = Math.max(0, Math.min(600, Math.round(n(px) || 0)));
     kw.layout();

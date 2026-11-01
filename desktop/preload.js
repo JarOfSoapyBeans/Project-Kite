@@ -33,6 +33,9 @@ contextBridge.exposeInMainWorld("kiteDesktop", {
   newWindow: call("window:new"),
   guestWindow: call("window:guest"),
   startUrls: call("ui:start-urls"),
+  // history, bookmarks, settings... for this window's profile
+  loadData: call("data:load"),
+  saveData: call("data:save"),
   // menus (real system menus; resolve to what was picked)
   tabMenu: call("menu:tab"),
   appMenu: call("menu:app"),
