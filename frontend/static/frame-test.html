@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Kite frame test</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #16181d; color: #e6e8ec; font: 14px system-ui, sans-serif; }
+      body { display: flex; flex-direction: column; }
+      header { padding: 6px 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      input { flex: 1; min-width: 260px; padding: 5px 8px; }
+      iframe { flex: 1; border: 0; background: #fff; }
+    </style>
+  </head>
+  <body>
+    <!--
+      A test page for finding crashes: one site shown in a plain frame, with none
+      of Kite Web's interface code around it. If a page crashes here too, the
+      cause is being inside a frame; if not, it's something Kite Web's interface does.
+      Open: /frame-test.html?u=https://www.youtube.com/&allow=all (or allow=none)
+    -->
+    <header>
+      <form id="f"><input id="u" placeholder="https://www.youtube.com/" /> <button>Load in frame</button></form>
+      <label><input type="checkbox" id="allow" checked /> give the frame Kite's permissions (allow=)</label>
+      <span id="note"></span>
+    </header>
+    <script src="config.js"></script>
+    <script>
+      const q = new URLSearchParams(location.search);
+      const backend = ((() => { try { return localStorage.getItem("backendUrl"); } catch { return null; } })() || window.APP_CONFIG.backendUrl).replace(/\/+$/, "");
+      const b64 = (t) => btoa(String.fromCharCode(...new TextEncoder().encode(t))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      document.getElementById("u").value = q.get("u") || "https://www.youtube.com/";
+      document.getElementById("allow").checked = q.get("allow") !== "none";
+      document.getElementById("f").addEventListener("submit", (e) => {
+        e.preventDefault();
+        const u = new URL(location.href);
+        u.searchParams.set("u", document.getElementById("u").value);
+        u.searchParams.set("allow", document.getElementById("allow").checked ? "all" : "none");
+        location.href = u.href;
+      });
+      (async () => {
+        let ticket = "";
+        try { ticket = (await (await fetch(backend + "/__kite/ticket", { credentials: "include" })).json()).ticket; } catch {}
+        const f = document.createElement("iframe");
+        if (q.get("allow") !== "none") f.setAttribute("allow", "fullscreen; autoplay; encrypted-media; picture-in-picture; clipboard-write; accelerometer; gyroscope; web-share; storage-access");
+        f.referrerPolicy = "origin";
+        f.src = backend + "/proxy/" + b64(document.getElementById("u").value) + "?__kite_t=" + encodeURIComponent(ticket || "");
+        document.body.append(f);
+        document.getElementById("note").textContent = ticket ? "" : "(couldn't get a ticket from the backend)";
+      })();
+    </script>
+  </body>
+</html>
