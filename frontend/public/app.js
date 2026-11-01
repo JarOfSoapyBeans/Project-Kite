@@ -215,6 +215,16 @@ document.getElementById("new-tab").addEventListener("click", () => createTab());
 document.getElementById("back").addEventListener("click", () => frameCommand("back"));
 document.getElementById("forward").addEventListener("click", () => frameCommand("forward"));
 document.getElementById("reload").addEventListener("click", () => frameCommand("reload"));
+// Open the current page outside Kite's frame, in a real browser window (still
+// through Kite). Handy for testing: there, a crashed page shows the browser's
+// own error page with an error code.
+document.getElementById("popout").addEventListener("click", () => {
+  if (!activeTab || !activeTab.url) return;
+  const win = window.open("about:blank", "_blank");
+  getTicket().then((ticket) => {
+    if (win) win.location.href = proxied(activeTab.url, ticket);
+  });
+});
 
 document.getElementById("settings").addEventListener("click", () => {
   const next = prompt("Kite backend URL (https://host):", backend());
