@@ -4,16 +4,19 @@
 //   history      kite://history    Ctrl+H
 //   bookmarks    kite://bookmarks  Ctrl+Shift+O
 //   settings     kite://settings
+//   devtools     kite://devtools   Ctrl+Shift+K (devtools-page.js)
 // Everything shown from your data is set as text, never as HTML.
 
 import * as D from "./lib/data.js";
 import { SEARCH_ENGINES } from "./lib/omnibox.js";
+import { renderDevtools } from "./devtools-page.js";
 
 export const PAGES = {
   newtab: "New Tab",
   history: "History",
   bookmarks: "Bookmarks",
   settings: "Settings",
+  devtools: "Kite DevTools",
 };
 
 // "kite://history" -> "history"; anything else -> null.
@@ -311,12 +314,13 @@ async function drawSync(box, sync) {
   box.append(form, msg);
 }
 
-const RENDER = { newtab: newTab, history, bookmarks, settings };
+const RENDER = { newtab: newTab, history, bookmarks, settings, devtools: renderDevtools };
 
 // Draw page `name` into `root`. ctx: { store, open(url, { newTab }), navigate(input),
 // action(name), favicons, hasProfiles, platformName }. Returns { refresh(name), focus() }.
 export function renderPage(name, root, ctx) {
   root.textContent = "";
   root.dataset.page = name;
+  root.__kiteView = {}; // pages that keep working (Kite DevTools) stop when replaced
   return RENDER[name](root, ctx);
 }

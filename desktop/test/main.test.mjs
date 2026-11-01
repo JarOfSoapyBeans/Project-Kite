@@ -375,3 +375,56 @@ test("new shortcuts from inside a page: history, bookmark, bookmarks bar, home",
   assert.equal(press({ key: "O", control: true, shift: true }), "bookmarks");
   assert.equal(press({ key: "Home", alt: true }), "home");
 });
+
+test("Kite DevTools: requests, page errors, crashes and permissions, per profile", async () => {
+  await call("view:create", [901]);
+  const view = S.views[S.views.length - 1];
+  const wc = view.webContents;
+  const ses = S.sessions["persist:main"];
+  const wr = ses.webRequest.listeners;
+  const start = (await call("devtools:events", [0])).next;
+  wr.sendHeaders({ id: 1, url: "https://site.test/a.js", timestamp: 1000 });
+  wr.completed({ id: 1, url: "https://site.test/a.js", method: "GET", webContentsId: wc.id, resourceType: "script", statusCode: 200, fromCache: false, timestamp: 1042,
+    responseHeaders: { "Content-Type": ["text/javascript; charset=utf-8"], "Content-Length": ["1234"] } });
+  wr.error({ id: 2, url: "https://site.test/b.png", method: "GET", webContentsId: wc.id, resourceType: "image", error: "net::ERR_NAME_NOT_RESOLVED" });
+  wr.completed({ id: 3, url: "kite://app/newtab.html", method: "GET", statusCode: 200 }); // Kite's own pages aren't listed
+  wc.emit("console-message", { level: "error", message: "Uncaught TypeError: x is not a function", lineNumber: 3, sourceId: "https://site.test/a.js" });
+  wc.emit("console-message", { level: "info", message: "just chatter" });
+  wc.emit("console-message", {}, 2, "old style warning", 9, "https://site.test/c.js"); // Electron before 35
+  wc.url = "https://site.test/";
+  wc.emit("render-process-gone", {}, { reason: "crashed", exitCode: 5 });
+  const { events: list, next } = await call("devtools:events", [start]);
+  const reqs = list.filter((e) => e.type === "request");
+  assert.equal(reqs.length, 2);
+  assert.deepEqual({ ...reqs[0], id: 0, time: 0 }, { id: 0, time: 0, type: "request", method: "GET", url: "https://site.test/a.js", dest: "script", tab: 901, ms: 42, status: 200, source: "network", contentType: "text/javascript", bytes: 1234 });
+  assert.equal(reqs[1].error, "net::ERR_NAME_NOT_RESOLVED");
+  assert.equal(reqs[1].status, 0);
+  const logs = list.filter((e) => e.type === "log").map((e) => `${e.level} ${e.text}`);
+  assert.deepEqual(logs, [
+    "error [page error] Uncaught TypeError: x is not a function (https://site.test/a.js:3)",
+    "warn [page warning] old style warning (https://site.test/c.js:9)",
+    "error [PAGE CRASH] https://site.test/: crashed (exit code 5)",
+  ]);
+  assert.ok(!("profile" in list[0]), "the profile id stays inside the app");
+  assert.deepEqual((await call("devtools:events", [next])).events, []);
+
+  // Another profile's window sees none of this.
+  await call("window:guest", []);
+  const gw = S.windows[S.windows.length - 1];
+  const gEvents = await call("devtools:events", [0], gw.webContents);
+  assert.equal(gEvents.events.filter((e) => e.url === "https://site.test/a.js").length, 0);
+
+  const st = await call("devtools:status", []);
+  assert.equal(st.profile.id, "main");
+  assert.ok(st.tabs >= 1 && st.windows >= 1);
+  assert.deepEqual(st.memory, { processes: 2, kb: 3000 });
+  assert.ok(st.events >= 5);
+  await call("devtools:clear", []);
+  assert.equal((await call("devtools:events", [0])).events.length, 0);
+  gw.close();
+});
+
+test("Kite DevTools is only for Kite's own interface", async () => {
+  const view = S.views[S.views.length - 1];
+  assert.throws(() => call("devtools:events", [0], view.webContents), /not allowed/);
+});

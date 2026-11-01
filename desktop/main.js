@@ -25,6 +25,7 @@ const { SitePermissions, attachPermissions, originOf } = require("./lib/permissi
 const { Downloads } = require("./lib/downloads.js");
 const { Sync } = require("./lib/sync.js");
 const { pageMenu, tabMenu, appMenu } = require("./lib/menus.js");
+const { DevtoolsLog, watchSession, consoleMessage } = require("./lib/devtools-log.js");
 
 const UI_DIR = path.join(__dirname, "app-ui");
 const UI_URL = "kite://app/index.html";
@@ -95,6 +96,7 @@ function shortcutFor(input) {
   if (mod && input.shift && key === "n") return "guest-window";
   if (mod && input.shift && key === "b") return "bookmarks-bar";
   if (mod && input.shift && key === "o") return "bookmarks";
+  if (mod && input.shift && key === "k") return "kite-devtools";
   if (mod && key === "t") return "new-tab";
   if (mod && key === "n") return "new-window";
   if (mod && key === "w") return "close-tab";
@@ -122,6 +124,7 @@ let downloads = null; // Downloads (lib/downloads.js)
 const permsByProfile = new Map(); // profile id -> SitePermissions
 const readySessions = new Set();
 const windows = new Set(); // KiteWindow
+const devlog = new DevtoolsLog(); // for kite://devtools
 
 function withPartition(profile) {
   return { ...profile, partition: profile.guest ? profile.id : profiles.partitionFor(profile.id) };
@@ -141,7 +144,14 @@ function sessionFor(profile) {
   ses.protocol.handle("kite", serveKite); // the new tab page and error page, inside tabs
   attachPermissions(ses, permsFor(profile), askPermission);
   downloads.attach(ses, profile.id);
+  watchSession(ses, devlog, profile.id, tabOfContents);
   return ses;
+}
+
+// Which tab a page belongs to (by its webContents id), for Kite DevTools.
+function tabOfContents(webContentsId) {
+  for (const kw of windows) for (const [tabId, view] of kw.views) if (view.webContents.id === webContentsId) return { tabId };
+  return null;
 }
 
 // A site asked for a permission: ask in the window showing it.
@@ -152,7 +162,8 @@ function askPermission({ webContents, origin, text }) {
   if (!owner) return { allow: false };
   return new Promise((resolve) => {
     const id = nextRequest++;
-    pendingRequests.set(id, { kw: owner.kw, tabId: owner.id, resolve });
+    pendingRequests.set(id, { kw: owner.kw, tabId: owner.id, origin, text, resolve });
+    devlog.add(owner.kw.profile.id, "permission", { tab: owner.id, origin, text, answer: "asked" });
     owner.kw.send({ type: "permission", request: { id, tabId: owner.id, origin, text } });
   });
 }
@@ -160,6 +171,7 @@ function finishRequest(id, answer) {
   const r = pendingRequests.get(id);
   if (!r) return;
   pendingRequests.delete(id);
+  devlog.add(r.kw.profile.id, "permission", { tab: r.tabId, origin: r.origin, text: r.text, answer: answer.allow ? "allowed" : "blocked", remember: Boolean(answer.remember) });
   r.kw.send({ type: "permission-done", id });
   r.resolve(answer);
 }
@@ -215,6 +227,7 @@ class KiteWindow {
         this.ses.clearStorageData().catch(() => {}); // a guest leaves nothing behind
         permsByProfile.delete(this.profile.id);
         guestData.delete(this.profile.id);
+        devlog.forget(this.profile.id);
       }
     });
     win.loadURL(UI_URL);
@@ -288,15 +301,24 @@ class KiteWindow {
       this.report(id, { url });
       this.reportZoom(id);
     });
+    // Pages' warnings and errors (everything else stays in F12's console).
+    wc.on("console-message", (...args) => {
+      const m = consoleMessage(args);
+      if (m.level === "log") return;
+      const where = m.source ? ` (${String(m.source).slice(0, 300)}${m.line ? ":" + m.line : ""})` : "";
+      devlog.add(this.profile.id, "log", { level: m.level, tab: id, text: `[page ${m.level === "error" ? "error" : "warning"}] ${m.text.slice(0, 3000)}${where}` });
+    });
     wc.on("did-navigate-in-page", (_e, url, isMainFrame) => isMainFrame && this.report(id, { url }));
     // Pages that can't load show Kite's error page (the address bar keeps the address).
     wc.on("did-fail-load", (_e, code, description, url, isMainFrame) => {
       if (!isMainFrame || code === -3 || String(url).startsWith("kite:")) return; // -3: cancelled, e.g. a new navigation
       this.failed.set(id, { url, code, description });
+      devlog.add(this.profile.id, "log", { level: "error", tab: id, text: `[page didn't load] ${url}: ${description} (${code})` });
       const q = new URLSearchParams({ u: url, c: String(code), d: String(description || "") });
       wc.loadURL(`${ERROR_URL}?${q}`).catch(() => {});
     });
     wc.on("render-process-gone", (_e, details) => {
+      devlog.add(this.profile.id, "log", { level: "error", tab: id, text: `[PAGE CRASH] ${wc.getURL()}: ${details.reason} (exit code ${details.exitCode})` });
       this.report(id, { loading: false, title: `Page crashed (${details.reason})` });
     });
     wc.on("found-in-page", (_e, r) => {
@@ -602,6 +624,29 @@ function windowOf(event) {
   return null;
 }
 
+// The app at a glance, for Kite DevTools.
+function devtoolsStatus(kw) {
+  let memory = null;
+  try {
+    const metrics = app.getAppMetrics ? app.getAppMetrics() : [];
+    memory = { processes: metrics.length, kb: metrics.reduce((sum, m) => sum + ((m.memory && m.memory.workingSetSize) || 0), 0) };
+  } catch {}
+  const mine = [...windows].filter((w) => w.profile.id === kw.profile.id);
+  return {
+    app: app.getVersion ? app.getVersion() : null,
+    versions: { electron: process.versions.electron || null, chrome: process.versions.chrome || null, node: process.versions.node },
+    platform: `${process.platform} ${process.arch}`,
+    uptime: Math.round((Date.now() - devlog.started) / 1000),
+    profile: { id: kw.profile.id, name: kw.profile.name, guest: Boolean(kw.profile.guest) },
+    windows: mine.length,
+    tabs: mine.reduce((sum, w) => sum + w.views.size, 0),
+    memory,
+    sync: kw.profile.guest ? null : sync.status(kw.profile.id),
+    downloads: downloads.list(kw.profile.id).length,
+    events: devlog.events.filter((e) => e.profile === kw.profile.id).length,
+  };
+}
+
 function openProfile(id) {
   const p = profiles.get(id);
   if (p) new KiteWindow(p);
@@ -661,6 +706,7 @@ function wireIpc() {
     fs.rmSync(path.join(app.getPath("userData"), `permissions-${id}.json`), { force: true });
     fs.rmSync(path.join(app.getPath("userData"), "profile-data", id), { recursive: true, force: true });
     await sync.unlink(id).catch(() => {});
+    devlog.forget(id);
     return true;
   });
   on("profiles:open", (_kw, id) => openProfile(String(id)));
@@ -677,6 +723,10 @@ function wireIpc() {
   on("sync:unlink", (kw) => (kw.profile.guest ? { unavailable: true } : sync.unlink(kw.profile.id)));
   on("sync:now", (kw) => (kw.profile.guest ? { unavailable: true } : sync.syncNow(kw.profile.id)));
   on("data:save", (kw, name, value) => saveData(kw, String(name), value));
+  // Kite DevTools (kite://devtools): this window's profile only.
+  on("devtools:events", (kw, since, limit) => devlog.since(kw.profile.id, n(since) || 0, Math.min(2000, n(limit) || 500)));
+  on("devtools:clear", (kw) => devlog.clear(kw.profile.id));
+  on("devtools:status", (kw) => devtoolsStatus(kw));
   on("ui:inset", (kw, px) => {
     kw.inset = Math.max(0, Math.min(600, Math.round(n(px) || 0)));
     kw.layout();
@@ -722,12 +772,21 @@ if (!app.requestSingleInstanceLock()) {
       read: readFile,
       write: writeFile,
       changed: (profileId, name, value) => dataChanged(profileId, name, value),
+      synced: (profileId, r) => {
+        if (r.error) devlog.add(profileId, "log", { level: "warn", text: `[sync] ${r.error}` });
+        else if (r.sent.length || r.took.length)
+          devlog.add(profileId, "log", { level: "log", text: `[sync] sent: ${r.sent.join(", ") || "nothing"}; received: ${r.took.join(", ") || "nothing"}` });
+      },
     });
     for (const p of profiles.list()) {
       sync.start(p.id);
       if (sync.status(p.id).linked) sync.syncNow(p.id);
     }
     downloads = new Downloads({ dir: () => app.getPath("downloads"), shell });
+    downloads.on("started", (profileId, d) => devlog.add(profileId, "log", { level: "log", text: `[download] ${d.filename} from ${d.url}` }));
+    downloads.on("done", (profileId, d) =>
+      devlog.add(profileId, "log", { level: d.state === "completed" ? "log" : "warn", text: `[download ${d.state}] ${d.filename} (${d.received} bytes)` })
+    );
     downloads.on("changed", (profileId) => {
       for (const kw of windows) if (kw.profile.id === profileId) kw.send({ type: "downloads", list: downloads.list(profileId) });
     });

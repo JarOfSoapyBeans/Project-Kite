@@ -323,6 +323,7 @@ const pageContext = {
   hasProfiles: Boolean(platform.features.profiles),
   sync: platform.sync || null, // the app: syncing with a Kite account
   platformName: platform.kind === "desktop" ? "app" : "web",
+  devtools: platform.devtools || null, // Kite DevTools (kite://devtools)
 };
 
 store.onChange((name) => {
@@ -432,6 +433,7 @@ const SHORTCUTS = {
   history: () => createTab("kite://history"),
   bookmarks: () => createTab("kite://bookmarks"),
   settings: () => createTab("kite://settings"),
+  "kite-devtools": () => createTab("kite://devtools"),
   bookmark: () => bookmarkPage(),
   "bookmarks-bar": () => store.set("settings", { ...settings(), showBookmarksBar: !settings().showBookmarksBar }),
 };
@@ -443,6 +445,7 @@ function shortcutFor(e) {
   if (mod && e.shiftKey && key === "t") return "reopen-tab";
   if (mod && e.shiftKey && key === "b") return "bookmarks-bar";
   if (mod && e.shiftKey && key === "o") return "bookmarks";
+  if (mod && e.shiftKey && key === "k") return "kite-devtools";
   if (mod && key === "t") return "new-tab";
   if (mod && key === "w") return "close-tab";
   if (mod && key === "l") return "focus-address";

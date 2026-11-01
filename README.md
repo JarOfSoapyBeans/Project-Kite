@@ -248,12 +248,24 @@ These switches can also be flipped live, without restarting, in Kite DevTools.
 
 ### Kite DevTools
 
-`kite://devtools` shows what Kite is doing behind the scenes: every request
-(the real address, status, who answered, size and time), the backend's log
-(`[kite 404]`, `[page error]`, `[video]`, `[PAGE CRASH]`...), memory and cache
-use, and the switches above. Because the backend's log includes everyone who
-browses through it, only Kite accounts named in `KITE_DEVTOOLS_USERS` (in
-`kite-secrets.bat`) can open it in Kite Web. The backend serves it at
+`kite://devtools` (**Ctrl+Shift+K**, or Kite DevTools in the ⋮ menu) shows
+what Kite is doing behind the scenes, in four tabs:
+
+- **Requests**: every request with its real address, status, type, size, time
+  and who answered. Filter by text or kind (pages, scripts, media, failed…),
+  click one for all its details, pause, or copy them as JSON.
+- **Log**: in Kite Web, the backend's log (`[kite 404]`, `[page error]`,
+  `[video]`, `[PAGE CRASH]`...); in the app, pages' warnings and errors,
+  crashes, pages that didn't load, permission questions, downloads and sync.
+- **Status**: memory, caches and sessions (Kite Web); versions, memory,
+  windows and tabs (the app).
+- **Switches** (Kite Web only): Kite's page-script parts, script rewriting and
+  the video log, changed live. Reload the tab you're testing afterwards.
+
+In the app each window sees only its own profile's events, and F12 still opens
+Chromium's developer tools for the page itself. In Kite Web, because the
+backend's log includes everyone who browses through it, only Kite accounts
+named in `KITE_DEVTOOLS_USERS` (in `kite-secrets.bat`) can open it. The backend serves it at
 `/__kite/devtools/{check,events,status,settings,clear}`.
 
 ## Kite accounts and Sign in with Google

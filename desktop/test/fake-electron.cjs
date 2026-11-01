@@ -9,9 +9,11 @@ const state = { schemes: [], handlers: {}, ipcHandle: {}, ipcOn: {}, windows: []
   popups: [], clipboard: [], saved: [], paths: { userData: path.join(base, "userData"), downloads: path.join(base, "Downloads") } };
 fs.mkdirSync(state.paths.downloads, { recursive: true });
 
+let nextContentsId = 1;
 class FakeWebContents extends EventEmitter {
   constructor() {
     super();
+    this.id = nextContentsId++;
     this.url = "";
     this.sent = [];
     this.loaded = [];
@@ -85,6 +87,12 @@ function fakeSession(name) {
     setPermissionCheckHandler(fn) { this.check = fn; },
     clearStorageData(opts) { this.cleared.push(opts || "all"); return Promise.resolve(); },
     addWordToSpellCheckerDictionary(w) { (this.words ||= []).push(w); },
+    webRequest: {
+      listeners: {},
+      onSendHeaders(fn) { this.listeners.sendHeaders = fn; },
+      onCompleted(fn) { this.listeners.completed = fn; },
+      onErrorOccurred(fn) { this.listeners.error = fn; },
+    },
   });
   return (state.sessions[name] = s);
 }
@@ -95,6 +103,8 @@ module.exports = {
   app: {
     userAgentFallback: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) kite-desktop/0.3.0 Chrome/140.0.0.0 Electron/38.0.0 Safari/537.36",
     getName: () => "kite-desktop",
+    getVersion: () => "0.3.0",
+    getAppMetrics: () => [{ memory: { workingSetSize: 1000 } }, { memory: { workingSetSize: 2000 } }],
     getPath: (n) => state.paths[n],
     requestSingleInstanceLock: () => true,
     whenReady: () => Promise.resolve(),

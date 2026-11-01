@@ -126,7 +126,8 @@ function appMenu({ profiles, currentProfile }, choose) {
     { label: "Save page as PDF…", click: () => choose("pdf") },
     { type: "separator" },
     { label: "Settings", click: () => choose("settings") },
-    { label: "Developer tools", accelerator: "F12", click: () => choose("devtools") },
+    { label: "Kite DevTools", accelerator: "CmdOrCtrl+Shift+K", click: () => choose("kite-devtools") },
+    { label: "Developer tools (this page)", accelerator: "F12", click: () => choose("devtools") },
     { type: "separator" },
     { label: "Exit", click: () => choose("exit") },
   ];

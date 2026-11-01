@@ -65,6 +65,15 @@ const platform = {
     now: () => bridge.syncNow(),
   },
 
+  // Kite DevTools: this profile's requests, page errors, crashes, downloads, sync.
+  devtools: {
+    check: async () => ({ allowed: true }),
+    events: (since) => bridge.devtoolsEvents(since),
+    status: () => bridge.devtoolsStatus(),
+    clear: () => bridge.devtoolsClear(),
+    settings: null, // the app has no switches: its tabs are real pages
+  },
+
   find: (id, text, opts) => bridge.find(id, text, opts),
   stopFind: (id) => bridge.stopFind(id),
   zoom: (id, dir) => bridge.zoom(id, dir),

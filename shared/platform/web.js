@@ -61,6 +61,19 @@ async function checkBackend() {
 }
 
 const data = createWebData(backend);
+
+async function devtoolsApi(path, body) {
+  const r = await fetch(backend() + "/__kite/devtools" + path, {
+    method: body ? "POST" : "GET",
+    credentials: "include",
+    headers: body ? { "content-type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(15000),
+  });
+  const answer = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(answer.error || `the backend answered ${r.status}`);
+  return answer;
+}
 const ZOOMS = [0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5];
 const zooms = new Map(); // tab id -> zoom factor
 
@@ -205,6 +218,16 @@ const platform = {
 
   // The padlock: Kite Web shows the site's address and connection; site
   // permissions (camera...) are your browser's own, for Kite's address.
+  // Kite DevTools: what the Kite backend is doing (only for Kite accounts named
+  // in its KITE_DEVTOOLS_USERS: it shows everyone's browsing through it).
+  devtools: {
+    check: () => devtoolsApi("/check"),
+    events: (since) => devtoolsApi("/events?since=" + (Number(since) || 0)),
+    status: () => devtoolsApi("/status"),
+    clear: () => devtoolsApi("/clear", {}),
+    settings: (changes) => devtoolsApi("/settings", changes || {}),
+  },
+
   async siteInfo(id) {
     const f = frames.get(id);
     const tabUrl = f && f.dataset.url;

@@ -19,8 +19,9 @@ const AFTER_HISTORY_MS = 30_000; // history changes with every page: send it les
 class Sync {
   // read(profileId, name) / write(profileId, name, value): the profile's local data.
   // changed(profileId, name, value): tell the profile's windows.
-  constructor({ dir, read, write, changed, fetchImpl = fetch, device = `Kite app on ${os.hostname()}` }) {
-    Object.assign(this, { dir, read, write, changed, fetchImpl, device });
+  // synced(profileId, { sent, took, error }): after each sync (for Kite DevTools).
+  constructor({ dir, read, write, changed, synced = () => {}, fetchImpl = fetch, device = `Kite app on ${os.hostname()}` }) {
+    Object.assign(this, { dir, read, write, changed, synced, fetchImpl, device });
     this.stores = new Map(); // profile id -> JsonStore of { backend, token, user, versions, dirty, lastSync, error }
     this.timers = new Map();
     this.running = new Map();
@@ -126,6 +127,8 @@ class Sync {
     const store = this.#store(profileId);
     const c = store.data;
     if (!c.token) return this.status(profileId);
+    const sent = [];
+    const took = [];
     try {
       // First just the versions; only what changed is downloaded.
       const versions = await this.#api(c, "GET", "/__kite/data/versions");
@@ -137,17 +140,19 @@ class Sync {
         const r = changed && local === null ? await this.#api(c, "GET", "/__kite/data/" + name) : null;
         if (local !== null) {
           // We changed it: send it (merged by the backend if the account changed too).
-          const sent = await this.#api(c, "PUT", "/__kite/data/" + name, { value: local, base: seen });
-          c.versions[name] = sent.updated;
-          if ("value" in sent) {
-            this.write(profileId, name, sent.value);
-            this.changed(profileId, name, sent.value);
+          const put = await this.#api(c, "PUT", "/__kite/data/" + name, { value: local, base: seen });
+          c.versions[name] = put.updated;
+          if ("value" in put) {
+            this.write(profileId, name, put.value);
+            this.changed(profileId, name, put.value);
           }
+          sent.push(name);
         } else if (r && r.updated > seen) {
           // Only the account changed (or we have nothing yet): take it.
           this.write(profileId, name, r.value);
           this.changed(profileId, name, r.value);
           c.versions[name] = r.updated;
+          took.push(name);
         }
         delete c.dirty[name];
       }
@@ -158,6 +163,9 @@ class Sync {
       if (err.status === 401) c.token = null;
     }
     store.changed();
+    try {
+      this.synced(profileId, { sent, took, error: c.error });
+    } catch {}
     return this.status(profileId);
   }
 }

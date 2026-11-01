@@ -197,3 +197,34 @@ body { display: flex; flex-direction: column; }
 .sync-form { gap: 8px !important; justify-content: flex-start !important; }
 .sync-form input { width: auto !important; flex: 1; }
 .settings .row { display: flex; gap: 8px; }
+
+/* Kite DevTools (kite://devtools) */
+.kp.devtools { max-width: none; padding: 16px 18px 20px; height: 100%; box-sizing: border-box; display: flex; flex-direction: column; }
+.devtools .dt-note { margin: 0 0 8px; font-size: 13px; white-space: pre-wrap; }
+.dt-tabs { display: flex; gap: 4px; border-bottom: 1px solid #2c323d; margin-bottom: 8px; }
+.kp .dt-tab { border: 0; border-radius: 6px 6px 0 0; background: none; color: var(--muted); padding: 6px 14px; }
+.kp .dt-tab.active { background: var(--bar); color: var(--text); }
+.dt-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.dt-view { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: auto; }
+.dt-view[hidden] { display: none !important; }
+.dt-tools { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
+.dt-tools input[type=search] { width: 320px; }
+.dt-count { font-size: 12px; margin-left: auto; }
+.dt-table { flex: 1; min-height: 120px; overflow: auto; font: 12px ui-monospace, Consolas, monospace; }
+.dt-row { display: grid; grid-template-columns: 70px 56px minmax(200px, 1fr) 150px 72px 70px 72px; gap: 8px; padding: 3px 6px; border-bottom: 1px solid #22262e; cursor: default; white-space: nowrap; }
+.dt-row > span { overflow: hidden; text-overflow: ellipsis; }
+.dt-headrow { color: var(--muted); font: 600 12px system-ui, sans-serif; border-bottom: 1px solid #2c323d; }
+.dt-table .dt-row:hover { background: var(--bar); }
+.dt-row.selected { background: var(--tab-active) !important; }
+.dt-row.bad > span:first-child { color: #ff7b72; }
+.dt-row.redirect > span:first-child { color: #d2a8ff; }
+.dt-row.cancelled > span:first-child { color: var(--muted); }
+.dt-row.ok > span:first-child { color: #7ee787; }
+.dt-details { max-height: 40%; overflow: auto; margin: 6px 0 0; padding: 8px 10px; background: var(--bar); border-radius: 8px; font: 12px ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-all; }
+.dt-log { flex: 1; overflow: auto; font: 12px ui-monospace, Consolas, monospace; }
+.dt-line { display: flex; gap: 10px; padding: 2px 6px; border-bottom: 1px solid #22262e; white-space: pre-wrap; word-break: break-word; }
+.dt-line .dt-time { color: var(--muted); flex-shrink: 0; }
+.dt-line.warn { background: #3a2f12; color: #f2cc60; }
+.dt-line.error { background: #3d1c1c; color: #ff9a92; }
+.dt-status { display: grid; grid-template-columns: max-content 1fr; gap: 6px 24px; padding: 8px 4px; font-size: 14px; }
+.devtools .settings { max-width: 860px; }

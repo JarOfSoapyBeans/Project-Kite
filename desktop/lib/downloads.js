@@ -58,8 +58,10 @@ class Downloads extends EventEmitter {
       item.once("done", (_e, state) => {
         info.state = state; // completed | cancelled | interrupted
         update();
+        this.emit("done", profileId, { ...info });
       });
       this.emit("changed", profileId);
+      this.emit("started", profileId, { ...info });
     });
   }
 

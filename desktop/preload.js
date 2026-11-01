@@ -41,6 +41,10 @@ contextBridge.exposeInMainWorld("kiteDesktop", {
   syncLink: call("sync:link"),
   syncUnlink: call("sync:unlink"),
   syncNow: call("sync:now"),
+  // Kite DevTools (kite://devtools)
+  devtoolsEvents: call("devtools:events"),
+  devtoolsStatus: call("devtools:status"),
+  devtoolsClear: call("devtools:clear"),
   // menus (real system menus; resolve to what was picked)
   tabMenu: call("menu:tab"),
   appMenu: call("menu:app"),
