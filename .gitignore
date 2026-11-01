@@ -18,3 +18,6 @@ kite-secrets.bat
 desktop/app-ui/
 desktop/dist/
 desktop/out/
+
+# Old place for the backend address (now built into frontend/dist/config.js)
+frontend/public/config.js
