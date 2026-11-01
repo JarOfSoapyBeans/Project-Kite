@@ -511,9 +511,16 @@ function dataFile(profileId, name) {
   return path.join(app.getPath("userData"), "profile-data", profileId, name + ".json");
 }
 
+// Writes happen in the background (history is saved every few seconds while you
+// browse, and a big file written on this thread would freeze every window);
+// reads see the newest value even before it reaches the disk.
+const latest = new Map(); // file -> text waiting to be written (or being written)
+const writing = new Set();
+
 function readFile(profileId, name) {
+  const file = dataFile(profileId, name);
   try {
-    return JSON.parse(fs.readFileSync(dataFile(profileId, name), "utf8"));
+    return JSON.parse(latest.has(file) ? latest.get(file) : fs.readFileSync(file, "utf8"));
   } catch {
     return null;
   }
@@ -521,9 +528,37 @@ function readFile(profileId, name) {
 
 function writeFile(profileId, name, value) {
   const file = dataFile(profileId, name);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file + ".tmp", JSON.stringify(value ?? null));
-  fs.renameSync(file + ".tmp", file);
+  latest.set(file, JSON.stringify(value ?? null));
+  if (!writing.has(file)) flushFile(file);
+}
+
+async function flushFile(file) {
+  writing.add(file);
+  try {
+    while (latest.has(file)) {
+      const text = latest.get(file);
+      await fs.promises.mkdir(path.dirname(file), { recursive: true });
+      await fs.promises.writeFile(file + ".tmp", text);
+      await fs.promises.rename(file + ".tmp", file);
+      if (latest.get(file) === text) latest.delete(file); // nothing newer arrived meanwhile
+    }
+  } catch (err) {
+    console.warn(`[kite] couldn't save ${file}: ${err.message}`);
+    latest.delete(file);
+  } finally {
+    writing.delete(file);
+  }
+}
+
+// Before quitting: whatever is still waiting goes to disk now.
+function flushAllFiles() {
+  for (const [file, text] of latest) {
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, text);
+    } catch {}
+  }
+  latest.clear();
 }
 
 // Tell a profile's windows (except one) that some of its data changed.
@@ -709,18 +744,28 @@ if (!app.requestSingleInstanceLock()) {
     if (process.platform !== "darwin") app.quit();
   });
   app.on("before-quit", () => {
+    flushAllFiles();
     if (profiles) profiles.store.saveNow();
     for (const p of permsByProfile.values()) p.store.saveNow();
   });
 
   // Links Kite can't show (mailto:, other apps) go to the system.
+  // Rules for every page Electron makes, including sites' pop-up windows (e.g.
+  // "Sign in with Google"). Kite's own windows and tabs then set stricter ones.
   app.on("web-contents-created", (_e, wc) => {
+    wc.on("will-attach-webview", (e) => e.preventDefault()); // no <webview> anywhere
     wc.on("will-navigate", (e, url) => {
       if (/^(mailto|tel|sms):/i.test(url)) {
         e.preventDefault();
         shell.openExternal(url);
-      }
+      } else if (!/^(https?|about|kite|data|blob):/i.test(url)) e.preventDefault(); // file:, chrome:...
     });
+    // A pop-up opening another window: websites only, sandboxed like the rest.
+    wc.setWindowOpenHandler(({ url }) =>
+      /^https?:\/\//i.test(url)
+        ? { action: "allow", overrideBrowserWindowOptions: { autoHideMenuBar: true, webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false } } }
+        : { action: "deny" }
+    );
   });
 }
 

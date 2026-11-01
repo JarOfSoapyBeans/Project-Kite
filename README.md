@@ -222,10 +222,28 @@ To update later: `git pull`, then restart `start_home.bat`. Your cookies stay in
 - [x] **Stage 5:** JavaScript rewriting (`backend/jsrewrite.js`): pages see their real
   address (`location`, `document.URL`, links' `.pathname`...) and the Kite tab looks like the
   top window, so single-page apps like YouTube route correctly
+- [x] **Stage 6:** computed lookups (`window["loc" + "ation"]`) and `eval` are rewritten too,
+  and Kite's replaced browser functions look like the browser's own
+- [x] Kite accounts (password or Sign in with Google), cookie import
+- [ ] **Stage 7:** Kite as a desktop app, with Kite Web working like it
+  - [x] Part 1: one shared interface (`shared/`) with a platform layer
+  - [x] Part 2: the app (Electron): real Chromium tabs
+  - [x] Part 3: profiles, permissions, downloads, find, zoom, print, menus
+  - [x] Part 4: history, bookmarks, new tab page, settings (app and Kite Web)
+  - [x] Part 5: data in your Kite account; app sync; find/zoom/print in Kite Web
+  - [ ] Part 6: Windows installer, auto-update, GitHub Actions, release
 
-Right now, most ordinary sites work, including live updates over WebSockets and staying
-signed in. The very hardest sites (Google, YouTube) need Stage 5, and some sign-in pages
-(notably Google's) refuse to work inside any proxy.
+### Known limits of Kite Web
+
+Most sites work, including live updates over WebSockets and staying signed in.
+YouTube is the hardest: its anti-bot check (BotGuard) can tell it isn't really on
+youtube.com, so videos may stop after about a minute, and in some browsers the
+watch page crashes when shown inside a frame (it plays when opened on its own,
+with the pop-out button). Some sign-in pages (notably Google's) refuse to work
+inside any proxy. The **Kite app** has none of these limits: its tabs are real
+browser pages. For finding problems: `KITE_MEDIA_LOG=1` (video requests),
+`KITE_CLIENT_OFF=...` (switch parts of Kite's page script off) and
+`frame-test.html` (a site in a plain frame); see `kite-secrets.example.bat`.
 
 ## Kite accounts and Sign in with Google
 
@@ -285,3 +303,11 @@ browsers do: domains, paths, `Secure`, `HttpOnly`, expiry and `SameSite`.
   hostnames that resolve to them, so it can't be used to reach your own network.
 - Only ports 80, 443, 8080 and 8443 are allowed by default (`ALLOWED_PORTS` to change).
 - Open proxies get abused fast. Don't share your backend URL publicly.
+- In Kite Web every site is shown from the backend's one address, so sites share
+  that address's browser storage (localStorage, IndexedDB): a site you visit through
+  Kite Web could read what another one stored there. Cookies are kept per site on
+  the backend and are safe from this. Use the Kite app (each site is its own
+  origin) for anything sensitive.
+- `.kite-cookies.json` on the backend holds everyone's site cookies and Kite
+  account data (history, bookmarks; passwords only as scrypt hashes, sync tokens
+  only as hashes). Keep it private; it's git-ignored and written owner-only.

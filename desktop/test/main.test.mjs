@@ -193,6 +193,25 @@ test("back, reload, fullscreen video, closing a tab", async () => {
   assert.ok(v1.webContents.closed && !win.children.includes(v1));
 });
 
+test("sites' pop-up windows: no file: addresses, no webviews, only websites in further windows", () => {
+  const wc = new (fake.BrowserWindow)({}).webContents;
+  fake.app.emit("web-contents-created", {}, wc);
+  const nav = (url) => {
+    const e = { prevented: false, preventDefault() { this.prevented = true; } };
+    wc.emit("will-navigate", e, url);
+    return e.prevented;
+  };
+  assert.equal(nav("https://accounts.google.com/"), false);
+  assert.equal(nav("file:///C:/Windows/win.ini"), true);
+  assert.equal(nav("chrome://settings"), true);
+  const w = { prevented: false, preventDefault() { this.prevented = true; } };
+  wc.emit("will-attach-webview", w);
+  assert.ok(w.prevented);
+  assert.equal(wc.openHandler({ url: "https://a.test/" }).action, "allow");
+  assert.ok(wc.openHandler({ url: "https://a.test/" }).overrideBrowserWindowOptions.webPreferences.sandbox);
+  assert.equal(wc.openHandler({ url: "file:///x" }).action, "deny");
+});
+
 test("mailto: links go to your mail app", () => {
   const wc = new (fake.BrowserWindow)({}).webContents;
   fake.app.emit("web-contents-created", {}, wc);
@@ -323,8 +342,9 @@ test("downloads reach the profile's windows; actions only for that profile", asy
 test("history, bookmarks, settings: saved per profile, shared with its windows, guests in memory", async () => {
   assert.equal(await call("data:load", ["bookmarks"]), null);
   assert.equal(await call("data:save", ["bookmarks", [{ id: "a", url: "https://a.test/", title: "A" }]]), true);
-  assert.deepEqual(await call("data:load", ["bookmarks"]), [{ id: "a", url: "https://a.test/", title: "A" }]);
-  assert.ok(fs.existsSync(path.join(S.paths.userData, "profile-data", "main", "bookmarks.json")));
+  assert.deepEqual(await call("data:load", ["bookmarks"]), [{ id: "a", url: "https://a.test/", title: "A" }], "read back at once");
+  await new Promise((r) => setTimeout(r, 50));
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(S.paths.userData, "profile-data", "main", "bookmarks.json"), "utf8")), [{ id: "a", url: "https://a.test/", title: "A" }], "then on disk");
   assert.equal(await call("data:save", ["../../evil", "x"]), false, "only Kite's own kinds of data");
   assert.equal(await call("data:load", ["../profiles"]), null);
   // another window of the same profile hears about it
