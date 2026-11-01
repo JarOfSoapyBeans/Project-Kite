@@ -131,3 +131,20 @@ test("sites with very large response headers (like YouTube) still load", async (
     big.closeAllConnections();
   }
 });
+
+test("a stray root-relative request with no Referer goes to the site the visitor last opened", async () => {
+  const { createKiteServer } = await import("../app.js");
+  const k = createKiteServer({ allowedOrigins: [], allowPrivate: true, allowedPorts: null, log: () => {} });
+  const u = await listen(k.server);
+  const sid = "kite_sid=" + "a".repeat(32);
+  await (await fetch(u + P(siteUrl + "/watch"), { headers: { cookie: sid, "sec-fetch-dest": "iframe" } })).text();
+  const stray = await fetch(u + "/s/player/base.js", { redirect: "manual", headers: { cookie: sid, "sec-fetch-site": "same-origin" } });
+  assert.equal(stray.status, 307);
+  assert.equal(stray.headers.get("location"), P(siteUrl + "/s/player/base.js"));
+  const other = await fetch(u + "/s/player/base.js", { redirect: "manual", headers: { cookie: "kite_sid=" + "b".repeat(32), "sec-fetch-site": "same-origin" } });
+  assert.equal(other.status, 404, "another visitor's last site isn't used");
+  const outside = await fetch(u + "/s/player/base.js", { redirect: "manual", headers: { cookie: sid, "sec-fetch-site": "cross-site" } });
+  assert.equal(outside.status, 404, "only the page's own requests");
+  k.server.closeAllConnections();
+  k.server.close();
+});

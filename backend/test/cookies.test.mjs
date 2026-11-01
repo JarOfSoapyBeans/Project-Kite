@@ -258,3 +258,39 @@ test("a tab ticket from the Kite UI lets a page in with no Referer and no cookie
   assert.equal((await page(null)).status, 403);
   server.close();
 });
+
+// ---------- importing cookies from a real browser ----------
+import { parseCookieExport } from "../cookies.js";
+
+test("cookies exported as JSON (Cookie-Editor) are imported, HttpOnly included", () => {
+  const list = parseCookieExport(JSON.stringify([
+    { domain: ".youtube.com", name: "SID", value: "s1", path: "/", secure: true, httpOnly: true, sameSite: "no_restriction", expirationDate: Date.now() / 1000 + 3600, hostOnly: false },
+    { domain: ".youtube.com", name: "SAPISID", value: "s2", path: "/", secure: true, httpOnly: false, sameSite: "unspecified", session: true },
+    { domain: "www.youtube.com", name: "HOSTONLY", value: "h", path: "/", secure: true, hostOnly: true },
+    { domain: ".com", name: "EVIL", value: "x", path: "/" },
+  ]));
+  const jar = new CookieJar();
+  assert.equal(jar.import(list), 3, "the cookie for all of .com is refused");
+  assert.equal(jar.header("https://www.youtube.com/watch"), "SID=s1; SAPISID=s2; HOSTONLY=h");
+  assert.equal(jar.header("https://m.youtube.com/"), "SID=s1; SAPISID=s2");
+  assert.equal(jar.scriptCookies("https://www.youtube.com/"), "SAPISID=s2; HOSTONLY=h", "pages can't read HttpOnly ones");
+  assert.equal(jar.header("https://example.com/"), "");
+});
+
+test("cookies.txt (Netscape format) is imported", () => {
+  const list = parseCookieExport([
+    "# Netscape HTTP Cookie File",
+    `#HttpOnly_.google.com\tTRUE\t/\tTRUE\t${Math.floor(Date.now() / 1000) + 3600}\tSID\tg1`,
+    `.google.com\tTRUE\t/\tFALSE\t0\tNID\tn=1`,
+    "bad line",
+  ].join("\n"));
+  assert.equal(list.length, 2);
+  const jar = new CookieJar();
+  assert.equal(jar.import(list), 2);
+  assert.equal(jar.header("https://accounts.google.com/"), "SID=g1; NID=n=1");
+  assert.equal(jar.scriptCookies("https://www.google.com/"), "NID=n=1");
+});
+
+test("broken JSON is reported", () => {
+  assert.throws(() => parseCookieExport("[{oops"), /isn't valid JSON/);
+});

@@ -170,9 +170,18 @@ test("rewrites CSS and passes images through byte-for-byte", async () => {
 
 test("gzip and non-UTF-8 pages are decoded", async () => {
   const gz = await get(proxyUrl, P(siteUrl + "/gz.html"));
-  assert.equal(gz.headers.get("content-encoding"), null);
+  assert.ok(["br", "gzip"].includes(gz.headers.get("content-encoding")), "re-compressed for the browser");
   assert.ok((await gz.text()).includes(`href="${P(siteUrl + "/x")}"`));
   assert.ok((await (await get(proxyUrl, P(siteUrl + "/latin1.html"))).text()).includes("café"));
+});
+
+test("rewritten pages are compressed for browsers that take it, not for others", async () => {
+  const big = await fetch(proxyUrl + P(siteUrl + "/gz.html"), { headers: { "accept-encoding": "gzip" } });
+  assert.equal(big.headers.get("content-encoding"), "gzip");
+  assert.ok((await big.text()).includes(`href="${P(siteUrl + "/x")}"`));
+  const plain = await new Promise((resolve) => http.get(proxyUrl + P(siteUrl + "/gz.html"), { headers: { "accept-encoding": "identity" } }, resolve));
+  assert.equal(plain.headers["content-encoding"], undefined);
+  plain.resume();
 });
 
 test("redirects are rewritten to proxy URLs", async () => {

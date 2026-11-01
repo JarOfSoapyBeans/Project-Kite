@@ -1,10 +1,15 @@
 {
   "buildCommand": "npm run build",
-  "outputDirectory": "public",
+  "outputDirectory": "dist",
   "headers": [
     {
       "source": "/config.js",
-      "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache"
+        }
+      ]
     }
   ]
 }

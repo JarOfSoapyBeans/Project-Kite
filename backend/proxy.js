@@ -9,9 +9,10 @@ import https from "node:https";
 import dns from "node:dns";
 import net from "node:net";
 import zlib from "node:zlib";
+import crypto from "node:crypto";
 import { promisify } from "node:util";
 import { requestContext } from "./cookies.js";
-import { kiteRenamer, rewriteJs } from "./jsrewrite.js";
+import { kiteRenamer, rewriteJs, rewriteSettings } from "./jsrewrite.js";
 
 export const PREFIX = "/proxy/";
 export const TICKET_PARAM = "__kite_t"; // the Kite UI's tab ticket; never sent to sites
@@ -30,6 +31,8 @@ const gunzip = promisify(zlib.gunzip);
 const inflate = promisify(zlib.inflate);
 const inflateRaw = promisify(zlib.inflateRaw);
 const brotli = promisify(zlib.brotliDecompress);
+const gzip = promisify(zlib.gzip);
+const brotliCompress = promisify(zlib.brotliCompress);
 
 // ---------- URL encoding ----------
 
@@ -226,6 +229,28 @@ function rewriteSrcset(value, base) {
 
 const ATTR_RE = /([^\s"'<>\/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
 const URL_ATTRS = new Set(["href", "src", "action", "formaction", "poster", "background", "cite", "longdesc", "manifest", "icon"]);
+// For finding which part of Kite's in-page script a site trips over:
+// KITE_CLIENT_OFF=frames,parent (any of these) switches parts off.
+export const CLIENT_PARTS = {
+  native: "make Kite's replaced functions look like the browser's own",
+  parent: "make the tab look like the top window (window.parent)",
+  frames: "patch same-origin child frames (iframes) as they appear",
+  address: "document.URL, referrer, domain, origin, link parts show the real site",
+  function: "rewrite code built at run time (new Function, setTimeout strings)",
+  dom: "rewrite scripts and patch frames as they're inserted (appendChild...)",
+  elements: "send URLs set on elements (img.src...) through Kite",
+  navigation: "keep page-started navigations in Kite (Navigation API)",
+  history: "keep pushState/replaceState addresses in Kite",
+  cookies: "document.cookie from Kite's cookie jar",
+  reflect: "Reflect.get/set for location and top",
+  diagnostics: "send page errors to the backend window",
+};
+// Parts switched off (Kite DevTools can change this while Kite runs).
+export const pageScriptOff = {};
+for (const name of String((typeof process !== "undefined" && process.env.KITE_CLIENT_OFF) || "").split(",")) {
+  if (CLIENT_PARTS[name.trim()]) pageScriptOff[name.trim()] = true;
+}
+
 const DROP_META = new Set(["content-security-policy", "content-security-policy-report-only", "x-frame-options"]);
 
 function rewriteTag(name, attrStr, state) {
@@ -304,7 +329,7 @@ export function rewriteHtml(html, pageUrl, { allowedOrigins = [], scriptCookies 
   const json = (v) => JSON.stringify(v).replace(/</g, "\\u003c");
   const inject =
     `<script data-kite>(${kiteClient.toString()})(${json(pageUrl)},${json(allowedOrigins)},${json(scriptCookies)},` +
-    `${kiteRenamer.toString()});</script>`;
+    `${rewriteSettings.on ? kiteRenamer.toString() : "null"},${json(pageScriptOff)});</script>`;
   const head = /<head\b[^>]*>/i.exec(out);
   const at = head ? head.index + head[0].length : /^\s*(?:<!doctype[^>]*>)?/i.exec(out)[0].length;
   return out.slice(0, at) + inject + out.slice(at);
@@ -326,9 +351,111 @@ export function rewriteHtml(html, pageUrl, { allowedOrigins = [], scriptCookies 
 //    to be the top window
 // It also tells the Kite UI the real URL and title, and lets the UI's
 // back/forward/reload buttons control the tab.
-function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
+function kiteClient(realUrl, origins, initialCookies, makeRenamer, off) {
+  off = off || {}; // parts switched off for testing (KITE_CLIENT_OFF, see CLIENT_PARTS)
   if (window.__kite) return;
-  window.__kite = true;
+  Object.defineProperty(window, "__kite", { value: true }); // not enumerable: pages don't see it
+
+  // ---------- looking native ----------
+  // Pages can tell a browser function from a replacement by its source text
+  // (fetch.toString() is "function fetch() { [native code] }" for the real one)
+  // and its name and length. Anti-bot checks such as YouTube's BotGuard do. So
+  // every function Kite replaces reports the original's text, name and length.
+  // The browser functions in the places Kite changes are noted first, and
+  // compared with what is there at the end (see "disguise" at the bottom).
+  var origToString = Function.prototype.toString;
+  var natives = new WeakMap(); // Kite function -> the browser function it stands in for
+  var kiteSource = "";
+  try { kiteSource = origToString.call(kiteClient) + (makeRenamer ? origToString.call(makeRenamer) : ""); } catch (e) {}
+  var ownCode = new WeakMap(); // function -> is it one of Kite's (cache)
+  function isKiteFunction(f) {
+    var known = ownCode.get(f);
+    if (known !== undefined) return known;
+    var text = "";
+    try { text = origToString.call(f); } catch (e) {}
+    known = text.length > 20 && text.indexOf("[native code]") < 0 && kiteSource.indexOf(text) >= 0;
+    ownCode.set(f, known);
+    return known;
+  }
+  function nativeAs(fake, orig) {
+    if (typeof fake !== "function" || typeof orig !== "function" || fake === orig) return fake;
+    natives.set(fake, orig);
+    try { Object.defineProperty(fake, "name", { value: orig.name, configurable: true }); } catch (e) {}
+    try { Object.defineProperty(fake, "length", { value: orig.length, configurable: true }); } catch (e) {}
+    return fake;
+  }
+  // The page's own code, as Kite rewrote it, shown as it was: __kite$location ->
+  // location, obj[__kite$k(key)] -> obj[key], eval(__kite$rw(code)) -> eval(code).
+  var unrewritten = new Map();
+  function unrewrite(text) {
+    if (text.indexOf("__kite$") < 0) return text;
+    var hit = unrewritten.get(text);
+    if (hit !== undefined) return hit;
+    var out = text
+      .split("__kite$k(").join("")
+      .split("__kite$rw(").join("")
+      .split(")/*k*/").join("")
+      .replace(/\b(location|top): __kite\$\1\b/g, "$1") // { location } shorthand
+      .split("__kite$location").join("location")
+      .split("__kite$top").join("top");
+    if (unrewritten.size > 500) unrewritten.clear();
+    unrewritten.set(text, out);
+    return out;
+  }
+  function kiteToString() {
+    if (natives.has(this)) return origToString.call(natives.get(this));
+    if (typeof this === "function" && isKiteFunction(this)) {
+      var name = String(this.name || "").replace(/^bound /, "");
+      return "function " + (/^[A-Za-z_$][\w$]*$/.test(name) ? name : "") + "() { [native code] }";
+    }
+    return unrewrite(origToString.call(this));
+  }
+  nativeAs(kiteToString, origToString);
+  function patchToString(win) {
+    try {
+      var fp = win.Function.prototype;
+      if (fp.toString === kiteToString) return;
+      natives.set(kiteToString, fp.toString === origToString ? origToString : fp.toString);
+      Object.defineProperty(fp, "toString", { value: kiteToString, writable: true, configurable: true, enumerable: false });
+    } catch (e) {}
+  }
+  if (!off.native) patchToString(window);
+  // Where Kite replaces browser functions; noted now, compared at the end.
+  var watched = [];
+  (function () {
+    var holders = [window, document, navigator, history, Reflect, Function.prototype, Object.prototype];
+    var names = Object.getOwnPropertyNames(window);
+    var wanted = /^(?:HTML\w*Element|SVG\w*Element|Document|Node|Element|History|XMLHttpRequest|Navigator|Navigation|ServiceWorkerContainer|Window|EventSource|Worker|SharedWorker|WebSocket|CharacterData|Text)$/;
+    for (var i = 0; i < names.length; i++) {
+      if (!wanted.test(names[i])) continue;
+      try {
+        var C = window[names[i]];
+        if (typeof C === "function" && C.prototype) holders.push(C.prototype);
+      } catch (e) {}
+    }
+    for (var h = 0; h < holders.length; h++) {
+      var keys = Object.getOwnPropertyNames(holders[h]);
+      var before = {};
+      for (var k = 0; k < keys.length; k++) {
+        try { before[keys[k]] = Object.getOwnPropertyDescriptor(holders[h], keys[k]); } catch (e) {}
+      }
+      watched.push({ holder: holders[h], before: before });
+    }
+  })();
+  function disguise() {
+    for (var h = 0; h < watched.length; h++) {
+      var w = watched[h];
+      for (var key in w.before) {
+        var a = w.before[key];
+        var b;
+        try { b = Object.getOwnPropertyDescriptor(w.holder, key); } catch (e) { continue; }
+        if (!a || !b) continue;
+        nativeAs(b.value, a.value);
+        nativeAs(b.get, a.get);
+        nativeAs(b.set, a.set);
+      }
+    }
+  }
   var PREFIX = "/proxy/";
   var current = realUrl;
   var realParent = window.parent;
@@ -457,8 +584,14 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
   }
   function navigateTo(v, replace) {
     var target = wrap(String(v)); // Kite address (or "#hash", "javascript:" unchanged)
-    if (replace) realLocation.replace(target);
-    else realLocation.assign(target);
+    if (String(target).charAt(0) === "#") return replace ? realLocation.replace(target) : realLocation.assign(target);
+    kiteLog("navigate", (replace ? "replace with " : "go to ") + unwrap(target) + stackHere());
+    // Let cookies the page just set reach the backend first, so the next page
+    // load sees them (sites like YouTube set a cookie, then reload).
+    afterCookies(function () {
+      if (replace) realLocation.replace(target);
+      else realLocation.assign(target);
+    });
   }
 
   // A stand-in for window.location / document.location with the real address.
@@ -483,7 +616,10 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
   Object.defineProperties(fakeLocation, {
     assign: { value: function (u) { navigateTo(u); } },
     replace: { value: function (u) { navigateTo(u, true); } },
-    reload: { value: function () { realLocation.reload(); } },
+    reload: { value: function () {
+      kiteLog("navigate", "reload" + stackHere());
+      afterCookies(function () { realLocation.reload(); });
+    } },
     toString: { value: function () { return currentUrl().href; } },
     ancestorOrigins: { get: function () { return { length: 0, item: function () { return null; }, contains: function () { return false; } }; } },
   });
@@ -493,6 +629,8 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
   // use). For a window or document they give the stand-in location and pretend
   // the Kite tab is the top window; for anything else they are plain .location
   // and .top. Installed into same-origin child frames too (e.g. about:blank).
+  function kiteKey(k) { return k === "location" || k === "top" ? "__kite$" + k : k; }
+  function kiteRewrite(code) { return typeof code === "string" ? rewriteCode(code) : code; }
   function installAccessors(win) {
     var OP = win.Object.prototype;
     if (Object.prototype.hasOwnProperty.call(OP, "__kite$location")) return;
@@ -541,6 +679,15 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
         this.location = v;
       },
     });
+    // Stage 6: obj[key] -> obj[__kite$k(key)], eval(code) -> eval(__kite$rw(code)).
+    win.Object.defineProperty(OP, "__kite$k", { configurable: true, writable: true, value: kiteKey });
+    win.Object.defineProperty(OP, "__kite$rw", { configurable: true, writable: true, value: kiteRewrite });
+    // Also on the window itself: found there, the lookup is as fast as no wrapper.
+    try {
+      win.Object.defineProperty(win, "__kite$k", { configurable: true, writable: true, value: kiteKey });
+      win.Object.defineProperty(win, "__kite$rw", { configurable: true, writable: true, value: kiteRewrite });
+    } catch (e) {}
+    if (win !== window && !off.native) patchToString(win);
     win.Object.defineProperty(OP, "__kite$top", {
       configurable: true,
       get: function () {
@@ -553,12 +700,12 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
   installAccessors(window);
 
   // The tab is the top window as far as the page can tell.
-  if (isTab) {
+  if (isTab && !off.parent) {
     try { Object.defineProperty(window, "parent", { configurable: true, get: function () { return window; } }); } catch (e) {}
   }
 
   // Same-origin child frames (about:blank sandboxes and the like) get the accessors too.
-  ["HTMLIFrameElement", "HTMLFrameElement", "HTMLObjectElement"].forEach(function (name) {
+  if (!off.frames) ["HTMLIFrameElement", "HTMLFrameElement", "HTMLObjectElement"].forEach(function (name) {
     var C = window[name];
     if (!C) return;
     ["contentWindow", "contentDocument"].forEach(function (prop) {
@@ -571,7 +718,10 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
           var v = d.get.call(this);
           try {
             var w = prop === "contentWindow" ? v : v && v.defaultView;
-            if (w && w.Object) installAccessors(w);
+            if (w && w.Object) {
+              installAccessors(w);
+              if (w !== window) patchHistory(w);
+            }
           } catch (e) {}
           return v;
         },
@@ -590,6 +740,7 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
       set: d.set,
     });
   }
+  if (!off.address) {
   docGetter(Document.prototype, "URL", function () { return currentUrl().href; });
   docGetter(Document.prototype, "documentURI", function () { return currentUrl().href; });
   docGetter(Document.prototype, "referrer", function (g) {
@@ -638,11 +789,12 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
       });
     });
   });
+  } // off.address
 
   // Code that pages build while running gets the same rewriting as their scripts.
   var renamer = makeRenamer ? makeRenamer() : null;
   function rewriteCode(code) {
-    if (!renamer || typeof code !== "string" || !/location|top/.test(code)) return code;
+    if (!renamer || typeof code !== "string" || !/location|top|\[|eval/.test(code)) return code;
     try { return renamer.applyEdits(code, renamer.findRenames(code)); } catch (e) { return code; }
   }
   var OrigFunction = Function;
@@ -660,6 +812,7 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
     return OrigFunction.apply(this, args);
   };
   KiteFunction.prototype = OrigFunction.prototype;
+  if (!off.function) {
   try {
     Object.defineProperty(OrigFunction.prototype, "constructor", { value: KiteFunction, configurable: true, writable: true });
     window.Function = KiteFunction;
@@ -672,6 +825,7 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
       return orig.apply(window, args);
     };
   });
+  } // off.function
   // <script> elements whose code is set from JavaScript, rewritten as they're inserted.
   function fixScript(node) {
     try {
@@ -687,22 +841,38 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
     } catch (e) {}
     return node;
   }
+  // A same-origin iframe gets Kite's patches the moment it's in the page, before
+  // the page can borrow fresh copies of browser functions from it.
+  function fixFrames(node) {
+    if (off.frames) return;
+    try {
+      if (!node || node.nodeType !== 1 && node.nodeType !== 11) return;
+      var frames = node.tagName === "IFRAME" ? [node] : node.firstElementChild ? node.querySelectorAll("iframe") : [];
+      for (var i = 0; i < frames.length; i++) void frames[i].contentWindow; // the hooked getter patches it
+    } catch (e) {}
+  }
+  if (!off.dom) {
   ["appendChild", "insertBefore", "replaceChild"].forEach(function (name) {
     var orig = Node.prototype[name];
     Node.prototype[name] = function (node) {
       fixScript(node);
-      return orig.apply(this, arguments);
+      var result = orig.apply(this, arguments);
+      fixFrames(node);
+      return result;
     };
   });
   ["append", "prepend", "before", "after", "replaceWith"].forEach(function (name) {
-    var proto = name === "append" || name === "prepend" ? Element.prototype : Element.prototype;
+    var proto = Element.prototype;
     var orig = proto[name];
     if (!orig) return;
     proto[name] = function () {
       for (var i = 0; i < arguments.length; i++) fixScript(arguments[i]);
-      return orig.apply(this, arguments);
+      var result = orig.apply(this, arguments);
+      for (var j = 0; j < arguments.length; j++) fixFrames(arguments[j]);
+      return result;
     };
   });
+  } // off.dom
 
   // ---------- network requests ----------
 
@@ -817,9 +987,11 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
     ["HTMLAnchorElement", "href"], ["HTMLAreaElement", "href"], ["HTMLFormElement", "action"],
     ["HTMLInputElement", "src"], ["HTMLInputElement", "formAction"], ["HTMLButtonElement", "formAction"],
     ["HTMLTrackElement", "src"], ["HTMLVideoElement", "poster"],
-  ].forEach(function (p) { hook(window[p[0]], p[1], wrap); });
-  hook(window.HTMLImageElement, "srcset", wrapSrcset);
-  hook(window.HTMLSourceElement, "srcset", wrapSrcset);
+  ].forEach(function (p) { if (!off.elements) hook(window[p[0]], p[1], wrap); });
+  if (!off.elements) {
+    hook(window.HTMLImageElement, "srcset", wrapSrcset);
+    hook(window.HTMLSourceElement, "srcset", wrapSrcset);
+  }
 
   var URL_ATTRS = { src: 1, href: 1, action: 1, formaction: 1, poster: 1, data: 1, srcset: 2, imagesrcset: 2 };
   function fixAttr(el, name, value) {
@@ -828,10 +1000,10 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
     if (name === "data" && el.tagName !== "OBJECT") return value;
     return kind === 2 ? wrapSrcset(value) : wrap(value);
   }
-  Element.prototype.setAttribute = function (name, value) {
+  if (!off.elements) Element.prototype.setAttribute = function (name, value) {
     return origSetAttribute.call(this, name, fixAttr(this, String(name).toLowerCase(), value));
   };
-  Element.prototype.getAttribute = function (name) {
+  if (!off.elements) Element.prototype.getAttribute = function (name) {
     var v = origGetAttribute.call(this, name);
     var n = String(name).toLowerCase();
     if (v !== null && URL_ATTRS[n] === 1 && this.namespaceURI === "http://www.w3.org/1999/xhtml") return unwrap(v);
@@ -849,13 +1021,14 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
       if (nv !== v) origSetAttribute.call(el, name, nv);
     }
   }
-  new MutationObserver(function (records) {
+  if (!off.elements) new MutationObserver(function (records) {
     for (var i = 0; i < records.length; i++) {
       var nodes = records[i].addedNodes;
       for (var j = 0; j < nodes.length; j++) {
         var n = nodes[j];
         if (n.nodeType !== 1) continue;
         if (n.matches(SELECTOR)) fixElement(n);
+        if (!n.firstElementChild) continue; // nothing inside: no need to search it
         var inner = n.querySelectorAll(SELECTOR);
         for (var k = 0; k < inner.length; k++) fixElement(inner[k]);
       }
@@ -910,7 +1083,7 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
   // Anything else that would leave the tab's Kite address: location.href = "...",
   // location.assign("/results?..."), form.submit() to another site...
   // (Navigation API; Chromium-based browsers.)
-  if (window.navigation && window.navigation.addEventListener) {
+  if (!off.navigation && window.navigation && window.navigation.addEventListener) {
     window.navigation.addEventListener("navigate", function (e) {
       if (!e.cancelable || e.downloadRequest || e.hashChange || e.navigationType === "traverse") return;
       var dest;
@@ -921,7 +1094,8 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
       if (!real) return;
       e.preventDefault();
       var path = proxyPath(real);
-      if (!e.formData) return location.assign(path);
+      kiteLog("navigate", "page navigated to " + real.href + " (" + e.navigationType + ")");
+      if (!e.formData) return afterCookies(function () { location.assign(path); });
       var form = document.createElement("form");
       form.method = "post";
       origSetAttribute.call(form, "action", path);
@@ -941,22 +1115,48 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
 
   // ---------- history: keep the tab on its Kite address ----------
 
-  ["pushState", "replaceState"].forEach(function (name) {
-    var original = history[name];
-    history[name] = function (state, title, url) {
-      if (url !== undefined && url !== null && url !== "") {
-        var real = null;
-        try { real = realOf(url); } catch (e) {}
-        if (real) {
-          current = real.href;
-          url = proxyPath(real);
-        }
-      }
-      var result = original.call(this, state, title, url);
-      report();
-      return result;
-    };
-  });
+  // Patched on History.prototype (not just window.history), and in same-origin
+  // child frames too: YouTube keeps its own copy of the browser's replaceState,
+  // which, given the real address, failed ("A history state object with URL
+  // 'https://www.youtube.com/' cannot be created...") and broke its page changes.
+  var mainHistory = window.history;
+  function patchHistory(win) {
+    try {
+      var proto = win.History && win.History.prototype;
+      if (!proto || proto.__kitePatched) return;
+      Object.defineProperty(proto, "__kitePatched", { value: true });
+      ["pushState", "replaceState"].forEach(function (name) {
+        var original = proto[name];
+        proto[name] = nativeAs(function (state, title, url) {
+          if (this !== mainHistory) return original.apply(this, arguments);
+          if (url !== undefined && url !== null && url !== "") {
+            var real = null;
+            try { real = realOf(url); } catch (e) {}
+            if (real) {
+              current = real.href;
+              url = proxyPath(real);
+            }
+          }
+          var result = original.call(this, state, title, url);
+          report();
+          return result;
+        }, original);
+      });
+    } catch (e) {}
+  }
+  if (!off.history) patchHistory(window);
+  // navigation.navigate("/watch?v=...") (Navigation API) goes to the Kite address.
+  if (!off.history) try {
+    var NavProto = window.Navigation && Navigation.prototype;
+    if (NavProto && NavProto.navigate) {
+      var origNavigate = NavProto.navigate;
+      NavProto.navigate = function (url) {
+        var args = Array.prototype.slice.call(arguments);
+        if (this === window.navigation) args[0] = wrap(url);
+        return origNavigate.apply(this, args);
+      };
+    }
+  } catch (e) {}
 
   function syncFromLocation() {
     var d = decode(location.pathname.slice(PREFIX.length).split("/")[0]);
@@ -987,7 +1187,7 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
     if (header === null || header === undefined) return;
     try { cookieView = parseCookies(decodeURIComponent(header)); } catch (e) {}
   }
-  try {
+  if (!off.cookies) try {
     Object.defineProperty(document, "cookie", {
       configurable: true,
       get: function () {
@@ -1005,13 +1205,81 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
           if (gone) delete cookieView[name];
           else cookieView[name] = first.slice(i + 1).trim();
         }
-        try {
-          if (origBeacon) origBeacon.call(navigator, "/__kite/cookie", new Blob([text], { type: "text/plain" }));
-          else origFetch.call(window, "/__kite/cookie", { method: "POST", body: text, keepalive: true });
-        } catch (e) {}
+        sendCookie(text);
       },
     });
   } catch (e) {}
+
+  // Cookie writes still on their way to the backend. Navigations wait for them
+  // (up to a second) so the next page is loaded with the new cookies.
+  var cookiesPending = 0, cookieWaiters = [];
+  function sendCookie(text) {
+    try {
+      cookiesPending++;
+      var done = function () {
+        if (--cookiesPending > 0) return;
+        var w = cookieWaiters;
+        cookieWaiters = [];
+        w.forEach(function (f) { f(); });
+      };
+      origFetch.call(window, "/__kite/cookie", { method: "POST", body: text, keepalive: true, credentials: "same-origin" }).then(done, done);
+    } catch (e) {
+      cookiesPending = Math.max(0, cookiesPending - 1);
+      try { origBeacon.call(navigator, "/__kite/cookie", new Blob([text], { type: "text/plain" })); } catch (e2) {}
+    }
+  }
+  function afterCookies(go) {
+    if (!cookiesPending) return go();
+    var ran = false;
+    var once = function () { if (!ran) { ran = true; go(); } };
+    cookieWaiters.push(once);
+    setTimeout(once, 1000);
+  }
+
+  // ---------- diagnostics ----------
+  // Errors on the page, and full-page navigations the page starts, are printed
+  // in the "Kite backend" window, so problems can be seen without DevTools.
+  var logCount = 0, logSeen = {};
+  function kiteLog(kind, text) {
+    try {
+      text = String(text).replace(/(?:https?:\/\/[^\s\/]+)?\/proxy\/([A-Za-z0-9_-]{8,})/g, function (m, t) {
+        var d = decode(t);
+        return d ? d.href : m;
+      }).slice(0, 2000);
+      if (logSeen[kind + text] || logCount >= 40) return;
+      logSeen[kind + text] = 1;
+      logCount++;
+      var body = JSON.stringify({ kind: kind, page: current, text: text });
+      if (origBeacon) origBeacon.call(navigator, "/__kite/log", new Blob([body], { type: "text/plain" }));
+      else origFetch.call(window, "/__kite/log", { method: "POST", body: body, keepalive: true });
+    } catch (e) {}
+  }
+  function stackHere() {
+    try {
+      var lines = String(new Error().stack || "").split("\n").slice(3, 8);
+      return lines.length ? "\n" + lines.join("\n") : "";
+    } catch (e) { return ""; }
+  }
+  if (!off.diagnostics) window.addEventListener("error", function (e) {
+    if (!e || typeof e.message !== "string") return; // a failed image etc., not a script error
+    var where = e.filename ? " (" + e.filename + ":" + e.lineno + ":" + e.colno + ")" : "";
+    var stack = e.error && e.error.stack ? "\n" + String(e.error.stack).split("\n").slice(1, 6).join("\n") : "";
+    kiteLog("error", e.message + where + stack);
+  });
+  if (!off.diagnostics) window.addEventListener("unhandledrejection", function (e) {
+    var r = e && e.reason;
+    kiteLog("error", "unhandled promise rejection: " + (r && r.stack ? String(r.stack).split("\n").slice(0, 6).join("\n") : String(r)));
+  });
+
+  // Reflect.get(window, "location") is the same lookup as window["location"].
+  if (!off.reflect) ["get", "set"].forEach(function (name) {
+    var orig = Reflect[name];
+    Reflect[name] = function (target, key) {
+      var args = Array.prototype.slice.call(arguments);
+      if (args.length > 1) args[1] = kiteKey(key);
+      return orig.apply(Reflect, args);
+    };
+  });
 
   // ---------- Kite UI ----------
 
@@ -1027,7 +1295,50 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
     if (d.cmd === "back") history.back();
     else if (d.cmd === "forward") history.forward();
     else if (d.cmd === "reload") location.reload();
+    else if (d.cmd === "print") window.print();
+    else if (d.cmd === "zoom") {
+      var z = Number(d.factor) || 1;
+      document.documentElement.style.zoom = z === 1 ? "" : String(z);
+      post({ kite: 1, type: "zoom", percent: Math.round(z * 100) });
+    } else if (d.cmd === "find") findInPage(String(d.text || ""), d.forward !== false, Boolean(d.findNext));
+    else if (d.cmd === "stop-find") {
+      findState = { text: "", active: 0, total: 0 };
+      try { getSelection().removeAllRanges(); } catch (e) {}
+    }
   });
+
+  // Find in page for Kite Web (Ctrl+F in Kite's toolbar): selects each match in
+  // turn and reports "3/10" back.
+  var findState = { text: "", active: 0, total: 0 };
+  function countMatches(text) {
+    var hay = (document.body ? document.body.innerText : "").toLowerCase();
+    var needle = text.toLowerCase();
+    var n = 0;
+    for (var i = hay.indexOf(needle); needle && i >= 0; i = hay.indexOf(needle, i + needle.length)) n++;
+    return n;
+  }
+  function findInPage(text, forward, next) {
+    var sel = null;
+    try { sel = getSelection(); } catch (e) {}
+    if (!text) {
+      findState = { text: "", active: 0, total: 0 };
+      if (sel) sel.removeAllRanges();
+      return post({ kite: 1, type: "find", active: 0, total: 0 });
+    }
+    if (!next || text !== findState.text) {
+      // A new search starts at the top of the page.
+      findState = { text: text, active: 0, total: countMatches(text) };
+      if (sel) sel.removeAllRanges();
+      forward = true;
+    }
+    var found = false;
+    try { found = window.find(text, false, !forward, true, false, false, false); } catch (e) {}
+    var t = findState.total;
+    if (found && t) findState.active = forward ? (findState.active % t) + 1 : ((findState.active - 2 + t) % t) + 1;
+    post({ kite: 1, type: "find", active: found ? findState.active : 0, total: t });
+  }
+
+  if (!off.native) disguise(); // last: every replaced browser function now reports the original's text
 }
 
 // Runs at the start of every Web Worker a proxied page starts (Stage 5). Workers
@@ -1036,7 +1347,23 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
 // work and report the real address.
 function kiteWorkerClient() {
   if (self.__kite) return;
-  self.__kite = true;
+  Object.defineProperty(self, "__kite", { value: true });
+  var origToString = Function.prototype.toString;
+  var natives = new WeakMap();
+  function nativeAs(fake, orig) {
+    natives.set(fake, orig);
+    try { Object.defineProperty(fake, "name", { value: orig.name, configurable: true }); } catch (e) {}
+    try { Object.defineProperty(fake, "length", { value: orig.length, configurable: true }); } catch (e) {}
+    return fake;
+  }
+  var kiteToString = function toString() { return origToString.call(natives.has(this) ? natives.get(this) : this); };
+  nativeAs(kiteToString, origToString);
+  Object.defineProperty(Function.prototype, "toString", { value: kiteToString, writable: true, configurable: true });
+  Object.defineProperty(Object.prototype, "__kite$k", { configurable: true, writable: true,
+    value: function (k) { return k === "location" || k === "top" ? "__kite$" + k : k; } });
+  Object.defineProperty(Object.prototype, "__kite$rw", { configurable: true, writable: true, value: function (c) { return c; } });
+  Object.defineProperty(self, "__kite$k", { configurable: true, writable: true, value: Object.prototype.__kite$k });
+  Object.defineProperty(self, "__kite$rw", { configurable: true, writable: true, value: Object.prototype.__kite$rw });
   var PREFIX = "/proxy/";
   var realLocation = self.location;
   function encode(url) {
@@ -1083,6 +1410,7 @@ function kiteWorkerClient() {
       } catch (e) {}
       return origFetch.call(self, input, init);
     };
+    nativeAs(self.fetch, origFetch);
   }
   if (self.XMLHttpRequest) {
     var origOpen = XMLHttpRequest.prototype.open;
@@ -1091,12 +1419,14 @@ function kiteWorkerClient() {
       if (args.length > 1) args[1] = wrap(url);
       return origOpen.apply(this, args);
     };
+    nativeAs(XMLHttpRequest.prototype.open, origOpen);
   }
   if (self.importScripts) {
     var origImport = self.importScripts;
     self.importScripts = function () {
       return origImport.apply(self, Array.prototype.map.call(arguments, wrap));
     };
+    nativeAs(self.importScripts, origImport);
   }
   if (self.WebSocket) {
     var OrigWS = self.WebSocket;
@@ -1116,7 +1446,7 @@ function kiteWorkerClient() {
     };
     KiteWS.prototype = OrigWS.prototype;
     ["CONNECTING", "OPEN", "CLOSING", "CLOSED"].forEach(function (k) { KiteWS[k] = OrigWS[k]; });
-    self.WebSocket = KiteWS;
+    self.WebSocket = nativeAs(KiteWS, OrigWS);
   }
   var fake = {};
   ["href", "origin", "protocol", "host", "hostname", "port", "pathname", "search", "hash"].forEach(function (k) {
@@ -1134,6 +1464,13 @@ function kiteWorkerClient() {
     set: function (v) { this.top = v; },
   });
 }
+
+// Worklets (audio, paint) get just what rewritten code needs to run.
+const WORKLET_PRELUDE =
+  'Object.defineProperty(Object.prototype,"__kite$k",{configurable:true,writable:true,value:function(k){return k==="location"||k==="top"?"__kite$"+k:k}});' +
+  'Object.defineProperty(Object.prototype,"__kite$rw",{configurable:true,writable:true,value:function(c){return c}});' +
+  'Object.defineProperty(Object.prototype,"__kite$location",{configurable:true,get:function(){return this.location},set:function(v){this.location=v}});' +
+  'Object.defineProperty(Object.prototype,"__kite$top",{configurable:true,get:function(){return this.top},set:function(v){this.top=v}});\n';
 
 // ---------- fetching ----------
 
@@ -1186,7 +1523,7 @@ const DROP_HEADERS = new Set([
   "transfer-encoding", "upgrade", "set-cookie", "set-cookie2", "content-security-policy",
   "content-security-policy-report-only", "x-frame-options", "strict-transport-security",
   "clear-site-data", "cross-origin-embedder-policy", "cross-origin-opener-policy",
-  "cross-origin-resource-policy", "report-to", "nel", "link", "refresh", "content-location",
+  "cross-origin-resource-policy", "report-to", "reporting-endpoints", "nel", "link", "refresh", "content-location",
   "alt-svc", "permissions-policy", "feature-policy", "origin-agent-cluster", "referrer-policy",
 ]);
 
@@ -1201,6 +1538,10 @@ function cleanHeaders(headers) {
   const cc = String(headers["cache-control"] || "");
   out["cache-control"] = /no-transform/i.test(cc) ? cc : (cc ? cc + ", " : "") + "no-transform";
   out["x-kite-source"] = "upstream"; // this response came from the website
+  // The browser's own reports (a crashed tab, a blocked feature) come to Kite and
+  // are printed in the backend window, instead of going to the site's relative
+  // report address, which on Kite's address doesn't exist (/web-reports -> 404).
+  out["reporting-endpoints"] = 'default="/__kite/report"';
   return out;
 }
 
@@ -1249,14 +1590,43 @@ function readLimited(stream, limit) {
   });
 }
 
-async function decodeBody(buf, encoding) {
+async function decodeBody(buf, encoding, limit = MAX_BODY) {
   const e = String(encoding || "").toLowerCase().trim();
-  const opts = { maxOutputLength: MAX_BODY * 2 };
+  const opts = { maxOutputLength: limit * 2 };
   if (!e || e === "identity") return buf;
   if (e === "gzip" || e === "x-gzip") return gunzip(buf, opts);
   if (e === "br") return brotli(buf, opts);
   if (e === "deflate") return inflate(buf, opts).catch(() => inflateRaw(buf, opts));
   throw new Error(`unsupported content-encoding "${e}"`);
+}
+
+// Brotli (fast setting) if the browser takes it, else gzip; small bodies as they are.
+const compressedCache = new Map(); // sha1 of big scripts -> { br, gzip }, the same scripts come again and again
+let compressedBytes = 0;
+export function compressedStats() {
+  return { entries: compressedCache.size, bytes: compressedBytes };
+}
+
+async function compressFor(req, body) {
+  if (body.length < 1024) return null;
+  const accept = String(req.headers["accept-encoding"] || "");
+  const name = /\bbr\b/.test(accept) ? "br" : /\bgzip\b/.test(accept) ? "gzip" : null;
+  if (!name) return null;
+  const key = body.length > 256 * 1024 ? crypto.createHash("sha1").update(body).digest("base64") + name : null;
+  if (key && compressedCache.has(key)) return { name, body: compressedCache.get(key) };
+  const out = name === "br"
+    ? await brotliCompress(body, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5, [zlib.constants.BROTLI_PARAM_SIZE_HINT]: body.length } })
+    : await gzip(body, { level: 6 });
+  if (key) {
+    compressedCache.set(key, out);
+    compressedBytes += out.length;
+    for (const [k, v] of compressedCache) {
+      if (compressedBytes <= 32 * 1024 * 1024) break;
+      compressedCache.delete(k);
+      compressedBytes -= v.length;
+    }
+  }
+  return { name, body: out };
 }
 
 function decodeText(buf, contentType, isHtml) {
@@ -1284,6 +1654,39 @@ function sendError(res, status, message) {
 
 // options: allowPrivate (tests only), allowedPorts (array, or null for any), allowedOrigins,
 //          jar (a CookieJar for this session, Stage 4), onCookies (called when it changes)
+// KITE_MEDIA_LOG=1: one line per video chunk (YouTube's googlevideo.com), to
+// see when and why playback stops. For example:
+//   [video] 200   1.9 MB  2.3s  itag=399 range=0-1999999 rn=12  pot=yes  (finished)
+//   [video] 403   0.0 MB  0.1s  itag=399 rn=31  pot=no
+// pot=no means YouTube's anti-bot check (BotGuard) gave the player no token;
+// YouTube then stops serving the video after about a minute (403).
+export const mediaLog = { on: typeof process !== "undefined" && process.env.KITE_MEDIA_LOG === "1" };
+export function logMedia(req, res, up, target, status) {
+  let u;
+  try {
+    u = new URL(target);
+  } catch {
+    return;
+  }
+  if (!/googlevideo\.com$/.test(u.hostname) || !u.pathname.includes("videoplayback")) return;
+  const started = Date.now();
+  let bytes = 0;
+  up.on("data", (c) => (bytes += c.length));
+  res.on("close", () => {
+    const q = u.searchParams;
+    const bits = [
+      q.get("itag") && `itag=${q.get("itag")}`,
+      (q.get("range") || req.headers.range) && `range=${q.get("range") || req.headers.range}`,
+      q.get("rn") && `rn=${q.get("rn")}`,
+      q.get("sabr") && "sabr",
+      q.has("pot") ? "pot=yes" : q.get("sabr") ? "pot=(inside the request)" : "pot=no",
+      req.method !== "GET" && req.method,
+      res.writableFinished ? "(finished)" : "(cut off: the page stopped it)",
+    ].filter(Boolean);
+    console.log(`[video] ${status}  ${(bytes / 1e6).toFixed(1).padStart(5)} MB  ${((Date.now() - started) / 1000).toFixed(1)}s  ${bits.join(" ")}`);
+  });
+}
+
 export async function handleProxy(req, res, options = {}) {
   const o = { allowPrivate: false, allowedPorts: [80, 443, 8080, 8443], allowedOrigins: [], ...options };
   let target;
@@ -1375,11 +1778,12 @@ export async function handleProxy(req, res, options = {}) {
       res.writeHead(status, headers);
       up.on("error", () => res.destroy());
       res.on("close", () => up.destroy());
+      if (mediaLog.on) logMedia(req, res, up, target, status);
       return up.pipe(res);
     }
 
     const raw = await readLimited(up, isScript ? MAX_SCRIPT : MAX_BODY);
-    const text = decodeText(await decodeBody(raw, up.headers["content-encoding"]), type, isHtml);
+    const text = decodeText(await decodeBody(raw, up.headers["content-encoding"], isScript ? MAX_SCRIPT : MAX_BODY), type, isHtml);
     let out;
     if (isHtml) {
       out = rewriteHtml(text, target, { allowedOrigins: o.allowedOrigins, scriptCookies: o.jar ? o.jar.scriptCookies(target) : "" });
@@ -1387,12 +1791,21 @@ export async function handleProxy(req, res, options = {}) {
       out = rewriteJs(text);
       // Workers don't get the page's injected script, so they get their own.
       if (dest === "worker" || dest === "sharedworker") out = `(${kiteWorkerClient.toString()})();\n` + out;
+      else if (/worklet$/.test(dest)) out = WORKLET_PRELUDE + out;
     } else {
       out = rewriteCss(text, target);
     }
-    const body = Buffer.from(out, "utf8");
+    let body = Buffer.from(out, "utf8");
     for (const h of ["content-encoding", "content-length", "etag", "last-modified", "accept-ranges", "content-range"]) {
       delete headers[h];
+    }
+    // Compressed again for the trip to the browser (through a home connection's
+    // upload, a 3 MB script is about 0.7 MB this way).
+    const encoding = await compressFor(req, body);
+    if (encoding) {
+      body = encoding.body;
+      headers["content-encoding"] = encoding.name;
+      headers.vary = headers.vary ? headers.vary + ", Accept-Encoding" : "Accept-Encoding";
     }
     headers["content-type"] = `${isHtml ? "text/html" : isScript ? type.split(";")[0].trim() : "text/css"}; charset=utf-8`;
     headers["cache-control"] = "no-cache, no-transform";

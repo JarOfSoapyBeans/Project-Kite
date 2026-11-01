@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kite</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header id="chrome">
+      <div id="tabbar">
+        <div id="tabs"></div>
+        <button id="new-tab" title="New tab">+</button>
+      </div>
+      <form id="toolbar" autocomplete="off">
+        <button type="button" id="back" title="Back">&#8592;</button>
+        <button type="button" id="forward" title="Forward">&#8594;</button>
+        <button type="button" id="reload" title="Reload">&#8635;</button>
+        <button type="button" id="home" title="Home (Alt+Home)" hidden>&#8962;</button>
+        <button type="button" id="popout" data-feature="popout" title="Open this page in its own browser window">&#10697;</button>
+        <div id="omnibox">
+          <button type="button" id="site" data-feature="siteInfo" title="View site information">&#9432;</button>
+          <input id="address" type="text" spellcheck="false" placeholder="Search or enter address" />
+          <button type="button" id="zoom-badge" hidden title="Reset zoom"></button>
+          <button type="button" id="star" hidden title="Bookmark this page (Ctrl+D)">&#9734;</button>
+        </div>
+        <button type="button" id="downloads" data-feature="downloads" title="Downloads (Ctrl+J)">&#11015;<span id="downloads-badge" hidden></span></button>
+        <button type="button" id="profile" data-feature="profiles" title="Profiles">&#128100;</button>
+        <button type="button" id="account" data-feature="accounts" title="Kite account">&#128100;</button>
+        <button type="button" id="cookies" data-feature="cookies" title="Cookies">&#127850;</button>
+        <button type="button" id="settings" data-feature="backendSettings" title="Backend settings">&#9881;</button>
+        <button type="button" id="menu" data-feature="menu" title="Kite menu">&#8942;</button>
+      </form>
+      <nav id="bookmarks-bar" hidden></nav>
+      <div id="status" hidden></div>
+
+      <!-- Under the toolbar: in the app, pages move down to make room for these. -->
+      <div id="permission-bar" class="bar" hidden>
+        <span id="permission-text"></span>
+        <button type="button" id="permission-once">Allow this time</button>
+        <button type="button" id="permission-always">Allow on every visit</button>
+        <button type="button" id="permission-never">Never allow</button>
+        <button type="button" id="permission-dismiss" class="x" title="Ignore">&times;</button>
+      </div>
+      <form id="find-bar" class="bar" hidden autocomplete="off">
+        <input id="find-text" type="text" spellcheck="false" placeholder="Find on page" />
+        <span id="find-count"></span>
+        <button type="button" id="find-prev" title="Previous (Shift+Enter)">&#8593;</button>
+        <button type="submit" id="find-next" title="Next (Enter)">&#8595;</button>
+        <button type="button" id="find-close" class="x" title="Close (Esc)">&times;</button>
+      </form>
+      <div id="bookmark-panel" class="panel" hidden>
+        <form id="bookmark-form" class="row" autocomplete="off">
+          <strong>Bookmark added</strong>
+          <input id="bookmark-name" maxlength="300" aria-label="Name" />
+          <button type="submit">Done</button>
+          <button type="button" id="bookmark-remove">Remove</button>
+        </form>
+      </div>
+      <div id="menu-panel" class="panel" hidden>
+        <div class="row">
+          <button type="button" data-action="new-tab">New tab</button>
+          <button type="button" data-action="history">History</button>
+          <button type="button" data-action="bookmarks">Bookmarks</button>
+          <button type="button" data-action="settings">Settings</button>
+          <button type="button" data-action="kite-devtools">Kite DevTools</button>
+          <button type="button" class="x" data-close>&times;</button>
+        </div>
+      </div>
+      <div id="downloads-panel" class="panel" hidden>
+        <div class="panel-head"><strong>Downloads</strong><span class="muted">Saved to your Downloads folder.</span><button type="button" class="x" data-close>&times;</button></div>
+        <ul id="downloads-list"></ul>
+      </div>
+      <div id="site-panel" class="panel" hidden>
+        <div class="panel-head"><strong id="site-origin"></strong><button type="button" class="x" data-close>&times;</button></div>
+        <p id="site-security"></p>
+        <ul id="site-permissions"></ul>
+        <div class="row">
+          <button type="button" id="site-reset">Reset permissions</button>
+          <button type="button" id="site-clear">Clear cookies and site data</button>
+        </div>
+      </div>
+      <div id="profile-panel" class="panel" hidden>
+        <div class="panel-head"><strong>Profiles</strong><span class="muted">Each profile has its own logins, history and settings. Windows belong to one profile.</span><button type="button" class="x" data-close>&times;</button></div>
+        <ul id="profile-list"></ul>
+        <form id="profile-add" class="row" autocomplete="off">
+          <input id="profile-name" placeholder="New profile name" maxlength="40" />
+          <button type="submit">Add profile</button>
+          <button type="button" id="profile-guest">Open guest window</button>
+        </form>
+      </div>
+      <div id="account-panel" hidden>
+        <div id="account-guest">
+          <div class="panel-head">
+            <strong>Welcome to Kite</strong>
+            <span class="muted">Sign in to keep your site logins on every device, or browse as a guest.</span>
+          </div>
+          <form id="account-form" autocomplete="on">
+            <input id="account-user" name="username" autocomplete="username" placeholder="Username" spellcheck="false" />
+            <input id="account-pass" name="password" type="password" autocomplete="current-password" placeholder="Password" />
+            <button type="submit" id="account-signin">Sign in</button>
+            <button type="button" id="account-signup">Create account</button>
+            <button type="button" id="account-google" hidden>Sign in with Google</button>
+            <button type="button" id="account-guest-go">Continue as guest</button>
+          </form>
+          <div id="account-message" class="muted"></div>
+        </div>
+        <div id="account-user-view" hidden>
+          <div class="panel-head">
+            <span>Signed in as <strong id="account-name"></strong></span>
+            <span class="muted">Your site logins (cookies) follow you to any device you sign in to Kite from.</span>
+            <button type="button" id="account-signout">Sign out</button>
+            <button type="button" id="account-signout-all">Sign out everywhere</button>
+          </div>
+          <div class="panel-head link-app">
+            <span class="muted">Your history, bookmarks and settings are kept in your account. Sync them with the Kite app too:</span>
+            <button type="button" id="link-app">Link the Kite app</button>
+          </div>
+          <div id="link-app-box" hidden>
+            <p>In the Kite app, open <strong>Settings</strong> &rarr; <strong>Sync with a Kite account</strong> and enter:</p>
+            <p class="link-code"><span>Kite address</span><code id="link-backend"></code></p>
+            <p class="link-code"><span>Code</span><code id="link-code"></code><span class="muted" id="link-expiry"></span></p>
+          </div>
+          <ul id="linked-apps"></ul>
+        </div>
+      </div>
+      <div id="cookie-panel" hidden>
+        <div class="panel-head">
+          <strong>Cookies</strong>
+          <span class="muted">Kept on your Kite backend, never in this browser.</span>
+          <button type="button" id="cookies-import-open">Import&hellip;</button>
+          <button type="button" id="cookies-clear-all">Clear all</button>
+        </div>
+        <div id="cookie-import" hidden>
+          <p class="muted">
+            Sign in to a site in Kite by bringing its cookies from your normal browser. There, install a
+            cookie export extension (for example <em>Cookie-Editor</em>), open the site while signed in
+            (e.g. youtube.com), export its cookies as JSON (or a cookies.txt file), then paste or choose
+            the file here. Treat an export like a password: anyone with it is signed in as you.
+          </p>
+          <textarea id="cookie-import-text" rows="5" spellcheck="false" placeholder="Paste exported cookies (JSON or cookies.txt)"></textarea>
+          <div class="import-row">
+            <input type="file" id="cookie-import-file" accept=".json,.txt,application/json,text/plain" />
+            <button type="button" id="cookie-import-go">Import</button>
+            <span id="cookie-import-result" class="muted"></span>
+          </div>
+        </div>
+        <ul id="cookie-list"></ul>
+      </div>
+    </header>
+
+    <main id="views"><div id="internal" hidden></div></main>
+
+    <script src="config.js"></script>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

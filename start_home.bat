@@ -28,7 +28,25 @@ set START_FRONTEND=1
 rem Port the backend listens on.
 set PORT=8080
 
+rem 1 = rewrite page scripts so they see their real address (Stage 5).
+rem 0 = don't (for testing whether a broken page is caused by it).
+set KITE_JS_REWRITE=1
+
+rem 1 = anyone using your Kite can create their own Kite account.
+rem 0 = only accounts that already exist can sign in.
+set KITE_SIGNUP=1
+
+rem Sign in with Google (optional): put your Google settings in kite-secrets.bat
+rem next to this file (git ignores it, so your client secret stays private):
+rem     set GOOGLE_CLIENT_ID=...apps.googleusercontent.com
+rem     set GOOGLE_CLIENT_SECRET=...
+rem     set KITE_GOOGLE_ALLOWED=you@gmail.com
+rem See "Kite accounts and Sign in with Google" in README.md.
+
 rem ------------------------------------------------------------------
+
+rem Your private settings (not in git), if you made the file.
+if exist "%~dp0kite-secrets.bat" call "%~dp0kite-secrets.bat"
 
 rem Behind a Cloudflare Tunnel: take visitors' real IPs from Cloudflare.
 set TRUST_CF=1
@@ -36,6 +54,8 @@ rem Keep site cookies (your logins) across restarts. Private, git-ignored.
 set COOKIE_FILE=%~dp0.kite-cookies.json
 rem The frontend talks to the backend through the tunnel.
 set BACKEND_URL=https://%TUNNEL_HOST%
+rem Where Google sends you back after signing in (add it to your OAuth client).
+set GOOGLE_REDIRECT_URI=https://%TUNNEL_HOST%/__kite/google/callback
 
 cd /d "%~dp0"
 

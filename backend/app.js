@@ -6,6 +6,7 @@
 
 import http from "node:http";
 import { handleProxy, PREFIX, TICKET_PARAM, MAX_HEADER_BYTES, decodeUrl, resolveViaReferer, toProxyUrl } from "./proxy.js";
+import { hub, captureConsole, recordRequest } from "./devtools.js";
 import { handleWebSocket, WS_PREFIX } from "./websocket.js";
 import { Sessions } from "./sessions.js";
 import { siteOf } from "./cookies.js";
@@ -36,6 +37,10 @@ export function createKiteServer(config = {}) {
   if (allowedPorts !== undefined) proxyOptions.allowedPorts = allowedPorts;
 
   // One cookie jar per person using Kite (Stage 4).
+  // Kite DevTools: recent requests and everything the backend prints.
+  const devtools = config.devtools || hub;
+  if (config.captureConsole !== false) captureConsole(devtools);
+
   const sessions = new Sessions({ file: cookieFile });
 
   const clientIp = (req) => (trustCloudflare && req.headers["cf-connecting-ip"]) || req.socket.remoteAddress || "unknown";
@@ -85,6 +90,18 @@ export function createKiteServer(config = {}) {
     return (real || url).slice(0, 120);
   }
 
+  // The real address of a proxied request, in full (for Kite DevTools).
+  function fullUrl(url) {
+    const u = new URL(url, "http://localhost");
+    const real = u.pathname.startsWith(PREFIX) && decodeUrl(u.pathname.slice(PREFIX.length).split("/")[0]);
+    if (!real) return url;
+    u.searchParams.delete(TICKET_PARAM);
+    if (!u.search) return real;
+    const r = new URL(real);
+    r.search = u.search; // a GET form's fields
+    return r.href;
+  }
+
   // Concurrent-request counter per visitor IP.
   function limiter(max) {
     const counts = new Map();
@@ -100,6 +117,30 @@ export function createKiteServer(config = {}) {
       return true;
     };
   }
+  // The site each visitor last opened a page from. A page's script sometimes asks
+  // for a path Kite didn't rewrite ("/s/player/base.js") and the browser sends no
+  // usable Referer with it; it almost certainly belongs to that site.
+  const lastPage = new Map(); // kite_sid (or IP) -> origin
+  const visitorKey = (req) => (/(?:^|;\s*)kite_sid=([A-Za-z0-9_-]{16,64})/.exec(req.headers.cookie || "") || [])[1] || "ip:" + clientIp(req);
+  function notePage(req, pathname) {
+    const dest = req.headers["sec-fetch-dest"];
+    if (dest !== "document" && dest !== "iframe") return;
+    const real = decodeUrl(pathname.slice(PREFIX.length).split("/")[0]);
+    if (!real) return;
+    lastPage.delete(visitorKey(req));
+    lastPage.set(visitorKey(req), new URL(real).origin);
+    if (lastPage.size > 5000) lastPage.delete(lastPage.keys().next().value);
+  }
+  function resolveViaLastPage(req, path) {
+    if (req.headers["sec-fetch-site"] !== "same-origin") return null; // only a proxied page's own requests
+    const origin = lastPage.get(visitorKey(req));
+    try {
+      return origin ? new URL(path, origin).href : null;
+    } catch {
+      return null;
+    }
+  }
+
   const requestSlot = limiter(maxActivePerIp);
   const socketSlot = limiter(maxWebSocketsPerIp);
 
@@ -112,7 +153,7 @@ export function createKiteServer(config = {}) {
     }
 
     // Kite's own endpoints check their callers themselves.
-    if (pathname.startsWith(KITE_PREFIX)) return handleKiteApi(req, res, { sessions, allowedOrigins });
+    if (pathname.startsWith(KITE_PREFIX)) return handleKiteApi(req, res, { sessions, allowedOrigins, clientIp: clientIp(req), devtools });
 
     if (!originAllowed(req)) {
       log(
@@ -139,13 +180,15 @@ export function createKiteServer(config = {}) {
     });
 
     if (pathname.startsWith(PREFIX)) {
+      notePage(req, pathname);
+      recordRequest(req, res, { realUrl: fullUrl(req.url), target: devtools }); // for Kite DevTools
       const jar = sessions.jarFor(req, res);
       return handleProxy(req, res, { ...proxyOptions, jar, onCookies: () => sessions.changed() });
     }
 
     // A page asked for a root-relative URL we didn't rewrite (e.g. "/logo.png"
     // built by JavaScript). Send it to the matching proxied URL.
-    const abs = resolveViaReferer(req, req.url);
+    const abs = resolveViaReferer(req, req.url) || resolveViaLastPage(req, req.url);
     if (abs) {
       res.writeHead(307, { location: toProxyUrl(abs) });
       return res.end();

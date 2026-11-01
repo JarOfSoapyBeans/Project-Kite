@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Can't reach this page</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #16181d; color: #e6e8ec;
+        font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+      main { width: min(600px, 88vw); }
+      .icon { font-size: 44px; }
+      h1 { font-size: 1.6rem; font-weight: 600; margin: 0.4rem 0 0.6rem; }
+      p { color: #b7beca; margin: 0.4rem 0; }
+      ul { color: #b7beca; padding-left: 1.2rem; }
+      code { color: #9aa3b2; font-size: 13px; }
+      button { margin-top: 1.2rem; padding: 0.55rem 1.2rem; border: 0; border-radius: 999px; background: #6ea8ff; color: #0b1220;
+        font: inherit; font-weight: 600; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="icon" id="icon">&#9729;</div>
+      <h1 id="title">Hmm, can't reach this page</h1>
+      <p id="text"></p>
+      <ul id="tips"></ul>
+      <code id="code"></code>
+      <div><button id="retry" type="button">Try again</button></div>
+    </main>
+    <script>
+      // Shown by Kite when a page can't load. Everything shown is set as text.
+      const q = new URLSearchParams(location.search);
+      const url = q.get("u") || "";
+      const code = Number(q.get("c"));
+      const desc = q.get("d") || "";
+      let host = url;
+      try { host = new URL(url).hostname; } catch {}
+      const set = (id, text) => (document.getElementById(id).textContent = text);
+      const tips = (list) => list.forEach((t) => { const li = document.createElement("li"); li.textContent = t; document.getElementById("tips").append(li); });
+      if (code <= -200 && code > -300) {
+        set("icon", "⚠️");
+        set("title", "Your connection isn't private");
+        set("text", `${host}'s security certificate isn't valid, so someone could be trying to read or change what you send (passwords, messages, cards). Kite didn't load the page.`);
+        tips(["Check the address for typos.", "If this is your own device or network equipment, its certificate may have expired."]);
+        document.title = "Privacy error";
+      } else if (code === -106) {
+        set("title", "You're not connected");
+        set("text", "Kite can't reach the internet.");
+        tips(["Check your network cables, modem and router.", "Reconnect to Wi-Fi."]);
+        document.title = "No internet";
+      } else if (code === -105 || code === -137) {
+        set("text", `${host}'s server address couldn't be found.`);
+        tips(["Check the address for typos.", "Search for the site instead."]);
+      } else if (code === -102) {
+        set("text", `${host} refused to connect.`);
+        tips(["The site may be down. Try again in a bit."]);
+      } else if (code === -118 || code === -7) {
+        set("text", `${host} took too long to respond.`);
+        tips(["Check your connection.", "Try again in a bit."]);
+      } else {
+        set("text", `${host} couldn't be loaded.`);
+      }
+      set("code", desc ? `${desc} (${code})` : "");
+      document.getElementById("retry").addEventListener("click", () => {
+        if (/^https?:\/\//i.test(url)) location.href = url;
+      });
+    </script>
+  </body>
+</html>
