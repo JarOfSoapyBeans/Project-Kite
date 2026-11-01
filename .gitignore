@@ -8,3 +8,6 @@ node_modules/
 frontend/public/config.js
 # Tunnel settings made by start_home.bat
 .kite-tunnel.yml
+
+# Your private settings for start_home.bat (Google client secret, ...)
+kite-secrets.bat

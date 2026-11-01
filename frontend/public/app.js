@@ -315,7 +315,8 @@ async function accountApi(path, body) {
   return data;
 }
 
-function showAccount(user, signupOn = true) {
+function showAccount(user, signupOn = true, googleOn = undefined) {
+  if (googleOn !== undefined) document.getElementById("account-google").hidden = !googleOn;
   currentUser = user;
   accountBtn.classList.toggle("signed-in", Boolean(user));
   accountBtn.title = user ? `Signed in as ${user}` : "Kite account (guest)";
@@ -360,6 +361,49 @@ document.getElementById("account-signup").addEventListener("click", () => {
   if (!username || !password) return (accountMsg.textContent = "Pick a username and a password (8+ characters), then click Create account.");
   accountAction("/signup", { username, password });
 });
+// Sign in with Google: Google opens in a popup; this page then collects the
+// result with a secret only it knows (so it lands in this page's Kite session).
+document.getElementById("account-google").addEventListener("click", () => {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  const claim = btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const start = `${backend()}/__kite/google/start?claim=${claim}&origin=${encodeURIComponent(location.origin)}`;
+  const popup = window.open(start, "kite-google", "width=500,height=680");
+  if (!popup) return (accountMsg.textContent = "Allow pop-ups for Kite, then try again.");
+  accountMsg.textContent = "Finish signing in with Google in the pop-up window...";
+  const began = Date.now();
+  let closedAt = 0;
+  const poll = async () => {
+    try {
+      const r = await fetch(backend() + "/__kite/account/google", {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ claim }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (r.status === 200) {
+        accountMsg.textContent = "";
+        showAccount(data.user);
+        try { localStorage.setItem("kite-account-seen", "1"); } catch {}
+        accountPanel.hidden = true;
+        reloadTabs();
+        return;
+      }
+      if (r.status !== 202) return (accountMsg.textContent = data.error || `backend answered ${r.status}`);
+    } catch {}
+    // A window Google showed can look "closed" to this page, so keep trying a
+    // little after that, and give up after 10 minutes.
+    let closed = false;
+    try { closed = popup.closed; } catch {}
+    if (closed && !closedAt) closedAt = Date.now();
+    if ((closedAt && Date.now() - closedAt > 8000) || Date.now() - began > 10 * 60 * 1000) {
+      accountMsg.textContent = "Google sign-in didn't finish.";
+      return;
+    }
+    setTimeout(poll, 1000);
+  };
+  setTimeout(poll, 1000);
+});
 document.getElementById("account-guest-go").addEventListener("click", () => {
   try { localStorage.setItem("kite-account-seen", "1"); } catch {}
   accountPanel.hidden = true;
@@ -372,7 +416,7 @@ document.getElementById("account-signout-all").addEventListener("click", () => {
 async function loadAccount() {
   try {
     const data = await accountApi("");
-    showAccount(data.user, data.signup);
+    showAccount(data.user, data.signup, data.google);
     let seen = false;
     try { seen = localStorage.getItem("kite-account-seen") === "1"; } catch {}
     if (!data.user && !seen) accountPanel.hidden = false; // first visit: sign in or continue as guest

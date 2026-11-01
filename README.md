@@ -141,6 +141,38 @@ Right now, most ordinary sites work, including live updates over WebSockets and 
 signed in. The very hardest sites (Google, YouTube) need Stage 5, and some sign-in pages
 (notably Google's) refuse to work inside any proxy.
 
+## Kite accounts and Sign in with Google
+
+Anyone using your Kite can browse as a guest (their own separate cookie jar) or
+sign in to a Kite account; signed in, their site logins follow them to every
+device. Accounts are made with a username and password (stored only as scrypt
+hashes) or with **Sign in with Google**. `KITE_SIGNUP=0` stops new accounts.
+
+Sign in with Google only signs you in to *Kite*. It doesn't sign you in to
+youtube.com inside Kite: Google gives those cookies only to its own sign-in page.
+To use your YouTube login in Kite, import its cookies (🍪 → Import…).
+
+To turn it on (once, free):
+
+1. Go to <https://console.cloud.google.com/> and create a project (e.g. "Kite").
+2. **APIs & Services → OAuth consent screen**: choose **External**, fill in the
+   app name and your email. Under **Test users** add every Google account that
+   may sign in (while the app is in "Testing", only those can).
+3. **APIs & Services → Credentials → Create credentials → OAuth client ID**:
+   type **Web application**. Under **Authorized redirect URIs** add
+   `https://kite-api.cat-code.org/__kite/google/callback` (your backend's address).
+4. In your Project-Kite folder, make a file `kite-secrets.bat` (git ignores it;
+   the client secret is a password, keep it out of GitHub) containing:
+
+   ```bat
+   set GOOGLE_CLIENT_ID=1234-abcd.apps.googleusercontent.com
+   set GOOGLE_CLIENT_SECRET=GOCSPX-...
+   rem optional: only these Google accounts may sign in
+   set KITE_GOOGLE_ALLOWED=you@gmail.com
+   ```
+5. Restart Kite. The account panel (👤) now has **Sign in with Google**; allow
+   pop-ups for your Kite page if the browser asks.
+
 ## Cookies and privacy
 
 Sites' cookies never reach your real browser. The backend keeps one cookie jar per

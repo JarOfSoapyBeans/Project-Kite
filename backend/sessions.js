@@ -111,6 +111,30 @@ export class Sessions {
     return s && s.user && this.accounts.has(s.user) ? s.user : null;
   }
 
+  // What the Kite UI shows for an account: the username, or a Google email.
+  displayName(user) {
+    const a = this.accounts.get(user);
+    return a ? a.email || user : null;
+  }
+
+  // Sign in with a Google identity ({ sub, email }), making the account the first
+  // time when allowNew. Returns an error message, or null on success.
+  signInWithGoogle(req, res, who, { allowNew = true } = {}) {
+    const key = "google." + crypto.createHash("sha256").update(who.sub).digest("hex").slice(0, 24);
+    let account = this.accounts.get(key);
+    if (!account) {
+      if (!allowNew) return "Creating accounts is turned off on this Kite.";
+      if (this.accounts.size >= MAX_ACCOUNTS) return "This Kite has reached its account limit.";
+      account = { google: who.sub, email: who.email, jar: new CookieJar(), created: Date.now() };
+      this.accounts.set(key, account);
+      console.log(`[info] new Kite account (Google): ${who.email}`);
+    }
+    if (account.google !== who.sub) return "That Google account doesn't match.";
+    account.email = who.email;
+    this.#startSignedIn(req, res, key);
+    return null;
+  }
+
   // Returns an error message, or null on success (and signs the request in).
   async signUp(req, res, username, password) {
     username = String(username || "").trim().toLowerCase();
@@ -132,9 +156,9 @@ export class Sessions {
     username = String(username || "").trim().toLowerCase();
     const account = this.accounts.get(username);
     // Unknown usernames take as long as wrong passwords, so they can't be told apart.
-    const salt = account ? Buffer.from(account.salt, "base64") : crypto.randomBytes(16);
+    const salt = account && account.salt ? Buffer.from(account.salt, "base64") : crypto.randomBytes(16);
     const hash = await hashPassword(String(password || "").slice(0, 200), salt);
-    if (!account || !crypto.timingSafeEqual(hash, Buffer.from(account.hash, "base64"))) return false;
+    if (!account || !account.hash || !crypto.timingSafeEqual(hash, Buffer.from(account.hash, "base64"))) return false;
     this.#startSignedIn(req, res, username);
     return true;
   }
@@ -178,7 +202,9 @@ export class Sessions {
       data.sessions[id] = s.user ? { lastUsed: s.lastUsed, user: s.user } : { lastUsed: s.lastUsed, cookies: s.jar.toJSON() };
     }
     for (const [name, a] of this.accounts) {
-      data.accounts[name] = { salt: a.salt, hash: a.hash, created: a.created, cookies: a.jar.toJSON() };
+      data.accounts[name] = a.google
+        ? { google: a.google, email: a.email, created: a.created, cookies: a.jar.toJSON() }
+        : { salt: a.salt, hash: a.hash, created: a.created, cookies: a.jar.toJSON() };
     }
     const tmp = this.file + ".tmp";
     try {
@@ -194,9 +220,9 @@ export class Sessions {
       const data = JSON.parse(fs.readFileSync(this.file, "utf8"));
       const now = Date.now();
       for (const [name, a] of Object.entries(data.accounts || {})) {
-        if (USERNAME.test(name) && a.salt && a.hash) {
-          this.accounts.set(name, { salt: a.salt, hash: a.hash, created: a.created, jar: CookieJar.fromJSON(a.cookies) });
-        }
+        if (!USERNAME.test(name)) continue;
+        if (a.google) this.accounts.set(name, { google: a.google, email: a.email, created: a.created, jar: CookieJar.fromJSON(a.cookies) });
+        else if (a.salt && a.hash) this.accounts.set(name, { salt: a.salt, hash: a.hash, created: a.created, jar: CookieJar.fromJSON(a.cookies) });
       }
       for (const [id, s] of Object.entries(data.sessions || {})) {
         if (now - s.lastUsed >= IDLE_MS) continue;

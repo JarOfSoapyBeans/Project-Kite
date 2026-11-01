@@ -84,3 +84,4 @@ body { display: flex; flex-direction: column; }
 #account-panel #account-signin { background: var(--accent); color: #0b1220; border-color: var(--accent); }
 #account-message { margin-top: 6px; min-height: 1em; }
 #account.signed-in { color: var(--accent); }
+#account-panel #account-google { background: #fff; color: #1f1f1f; border-color: #dadce0; }

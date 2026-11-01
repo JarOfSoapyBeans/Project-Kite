@@ -12,6 +12,8 @@
 //   POST /__kite/account/signup    create a Kite account and sign in  (Kite UI only)
 //   POST /__kite/account/signin    sign in                            (Kite UI only)
 //   POST /__kite/account/signout   back to a guest session            (Kite UI only)
+//   POST /__kite/account/google    collect a finished Google sign-in  (Kite UI only)
+//   GET  /__kite/google/start, /__kite/google/callback   the Google sign-in popup (google.js)
 //   POST /__kite/account/signout-everywhere                           (Kite UI only)
 //
 // Proxied pages all live on the backend's address, so the cookie manager only
@@ -20,6 +22,9 @@
 
 import { sourcePage } from "./proxy.js";
 import { parseCookieExport } from "./cookies.js";
+import { googleConfig, handleGoogle, takeGoogleResult } from "./google.js";
+
+const GOOGLE = googleConfig();
 
 export const KITE_PREFIX = "/__kite/";
 
@@ -161,6 +166,12 @@ export async function handleKiteApi(req, res, { sessions, allowedOrigins = [], c
     return send(res, 204), true;
   }
 
+  // The Google sign-in popup (checks its own callers; see google.js).
+  if (pathname === "/__kite/google/start" || pathname === "/__kite/google/callback") {
+    await handleGoogle(req, res, { allowedOrigins, config: GOOGLE });
+    return true;
+  }
+
   // The cookie manager: only for the Kite UI.
   if (pathname === "/__kite/cookies" || pathname === "/__kite/cookies/clear" || pathname === "/__kite/cookies/import" ||
     pathname === "/__kite/ticket" || pathname === "/__kite/account" || pathname.startsWith("/__kite/account/")) {
@@ -178,7 +189,7 @@ export async function handleKiteApi(req, res, { sessions, allowedOrigins = [], c
     if (pathname === "/__kite/account" || pathname.startsWith("/__kite/account/")) {
       if (pathname === "/__kite/account") {
         sessions.jarFor(req, res); // every visitor has a (guest) session
-        return json(200, { user: sessions.userOf(req), signup: SIGNUP_ON }), true;
+        return json(200, { user: sessions.displayName(sessions.userOf(req)), signup: SIGNUP_ON, google: GOOGLE.enabled }), true;
       }
       if (req.method !== "POST") return send(res, 405, "", cors), true;
       let body = {};
@@ -195,6 +206,14 @@ export async function handleKiteApi(req, res, { sessions, allowedOrigins = [], c
         if (user) sessions.signOutEverywhere(user);
         sessions.signOut(req, res);
         return json(200, { user: null }), true;
+      }
+      if (action === "google") {
+        const r = takeGoogleResult(body.claim);
+        if (!r) return json(202, { waiting: true }), true;
+        if (r.error) return json(400, { error: r.error }), true;
+        const error = sessions.signInWithGoogle(req, res, r.ok, { allowNew: SIGNUP_ON });
+        if (error) return json(403, { error }), true;
+        return json(200, { user: sessions.displayName(sessions.userOf(req)) || r.ok.email }), true;
       }
       const username = String(body.username || "").trim().toLowerCase();
       if (action === "signup") {
