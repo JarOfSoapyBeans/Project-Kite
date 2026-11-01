@@ -12,7 +12,7 @@ import zlib from "node:zlib";
 import crypto from "node:crypto";
 import { promisify } from "node:util";
 import { requestContext } from "./cookies.js";
-import { kiteRenamer, rewriteJs, JS_REWRITE_ON } from "./jsrewrite.js";
+import { kiteRenamer, rewriteJs, rewriteSettings } from "./jsrewrite.js";
 
 export const PREFIX = "/proxy/";
 export const TICKET_PARAM = "__kite_t"; // the Kite UI's tab ticket; never sent to sites
@@ -245,9 +245,10 @@ export const CLIENT_PARTS = {
   reflect: "Reflect.get/set for location and top",
   diagnostics: "send page errors to the backend window",
 };
-const CLIENT_OFF = {};
+// Parts switched off (Kite DevTools can change this while Kite runs).
+export const pageScriptOff = {};
 for (const name of String((typeof process !== "undefined" && process.env.KITE_CLIENT_OFF) || "").split(",")) {
-  if (CLIENT_PARTS[name.trim()]) CLIENT_OFF[name.trim()] = true;
+  if (CLIENT_PARTS[name.trim()]) pageScriptOff[name.trim()] = true;
 }
 
 const DROP_META = new Set(["content-security-policy", "content-security-policy-report-only", "x-frame-options"]);
@@ -328,7 +329,7 @@ export function rewriteHtml(html, pageUrl, { allowedOrigins = [], scriptCookies 
   const json = (v) => JSON.stringify(v).replace(/</g, "\\u003c");
   const inject =
     `<script data-kite>(${kiteClient.toString()})(${json(pageUrl)},${json(allowedOrigins)},${json(scriptCookies)},` +
-    `${JS_REWRITE_ON ? kiteRenamer.toString() : "null"},${json(CLIENT_OFF)});</script>`;
+    `${rewriteSettings.on ? kiteRenamer.toString() : "null"},${json(pageScriptOff)});</script>`;
   const head = /<head\b[^>]*>/i.exec(out);
   const at = head ? head.index + head[0].length : /^\s*(?:<!doctype[^>]*>)?/i.exec(out)[0].length;
   return out.slice(0, at) + inject + out.slice(at);
@@ -1602,6 +1603,10 @@ async function decodeBody(buf, encoding, limit = MAX_BODY) {
 // Brotli (fast setting) if the browser takes it, else gzip; small bodies as they are.
 const compressedCache = new Map(); // sha1 of big scripts -> { br, gzip }, the same scripts come again and again
 let compressedBytes = 0;
+export function compressedStats() {
+  return { entries: compressedCache.size, bytes: compressedBytes };
+}
+
 async function compressFor(req, body) {
   if (body.length < 1024) return null;
   const accept = String(req.headers["accept-encoding"] || "");
@@ -1655,7 +1660,7 @@ function sendError(res, status, message) {
 //   [video] 403   0.0 MB  0.1s  itag=399 rn=31  pot=no
 // pot=no means YouTube's anti-bot check (BotGuard) gave the player no token;
 // YouTube then stops serving the video after about a minute (403).
-const MEDIA_LOG = typeof process !== "undefined" && process.env.KITE_MEDIA_LOG === "1";
+export const mediaLog = { on: typeof process !== "undefined" && process.env.KITE_MEDIA_LOG === "1" };
 export function logMedia(req, res, up, target, status) {
   let u;
   try {
@@ -1773,7 +1778,7 @@ export async function handleProxy(req, res, options = {}) {
       res.writeHead(status, headers);
       up.on("error", () => res.destroy());
       res.on("close", () => up.destroy());
-      if (MEDIA_LOG) logMedia(req, res, up, target, status);
+      if (mediaLog.on) logMedia(req, res, up, target, status);
       return up.pipe(res);
     }
 

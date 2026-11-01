@@ -6,6 +6,7 @@
 
 import http from "node:http";
 import { handleProxy, PREFIX, TICKET_PARAM, MAX_HEADER_BYTES, decodeUrl, resolveViaReferer, toProxyUrl } from "./proxy.js";
+import { hub, captureConsole, recordRequest } from "./devtools.js";
 import { handleWebSocket, WS_PREFIX } from "./websocket.js";
 import { Sessions } from "./sessions.js";
 import { siteOf } from "./cookies.js";
@@ -36,6 +37,10 @@ export function createKiteServer(config = {}) {
   if (allowedPorts !== undefined) proxyOptions.allowedPorts = allowedPorts;
 
   // One cookie jar per person using Kite (Stage 4).
+  // Kite DevTools: recent requests and everything the backend prints.
+  const devtools = config.devtools || hub;
+  if (config.captureConsole !== false) captureConsole(devtools);
+
   const sessions = new Sessions({ file: cookieFile });
 
   const clientIp = (req) => (trustCloudflare && req.headers["cf-connecting-ip"]) || req.socket.remoteAddress || "unknown";
@@ -83,6 +88,18 @@ export function createKiteServer(config = {}) {
     const { pathname } = new URL(url, "http://localhost");
     const real = pathname.startsWith(PREFIX) && decodeUrl(pathname.slice(PREFIX.length).split("/")[0]);
     return (real || url).slice(0, 120);
+  }
+
+  // The real address of a proxied request, in full (for Kite DevTools).
+  function fullUrl(url) {
+    const u = new URL(url, "http://localhost");
+    const real = u.pathname.startsWith(PREFIX) && decodeUrl(u.pathname.slice(PREFIX.length).split("/")[0]);
+    if (!real) return url;
+    u.searchParams.delete(TICKET_PARAM);
+    if (!u.search) return real;
+    const r = new URL(real);
+    r.search = u.search; // a GET form's fields
+    return r.href;
   }
 
   // Concurrent-request counter per visitor IP.
@@ -136,7 +153,7 @@ export function createKiteServer(config = {}) {
     }
 
     // Kite's own endpoints check their callers themselves.
-    if (pathname.startsWith(KITE_PREFIX)) return handleKiteApi(req, res, { sessions, allowedOrigins, clientIp: clientIp(req) });
+    if (pathname.startsWith(KITE_PREFIX)) return handleKiteApi(req, res, { sessions, allowedOrigins, clientIp: clientIp(req), devtools });
 
     if (!originAllowed(req)) {
       log(
@@ -164,6 +181,7 @@ export function createKiteServer(config = {}) {
 
     if (pathname.startsWith(PREFIX)) {
       notePage(req, pathname);
+      recordRequest(req, res, { realUrl: fullUrl(req.url), target: devtools }); // for Kite DevTools
       const jar = sessions.jarFor(req, res);
       return handleProxy(req, res, { ...proxyOptions, jar, onCookies: () => sessions.changed() });
     }

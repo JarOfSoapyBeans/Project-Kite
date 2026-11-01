@@ -244,6 +244,17 @@ inside any proxy. The **Kite app** has none of these limits: its tabs are real
 browser pages. For finding problems: `KITE_MEDIA_LOG=1` (video requests),
 `KITE_CLIENT_OFF=...` (switch parts of Kite's page script off) and
 `frame-test.html` (a site in a plain frame); see `kite-secrets.example.bat`.
+These switches can also be flipped live, without restarting, in Kite DevTools.
+
+### Kite DevTools
+
+`kite://devtools` shows what Kite is doing behind the scenes: every request
+(the real address, status, who answered, size and time), the backend's log
+(`[kite 404]`, `[page error]`, `[video]`, `[PAGE CRASH]`...), memory and cache
+use, and the switches above. Because the backend's log includes everyone who
+browses through it, only Kite accounts named in `KITE_DEVTOOLS_USERS` (in
+`kite-secrets.bat`) can open it in Kite Web. The backend serves it at
+`/__kite/devtools/{check,events,status,settings,clear}`.
 
 ## Kite accounts and Sign in with Google
 

@@ -16,6 +16,9 @@
 //   GET  /__kite/google/start, /__kite/google/callback   the Google sign-in popup (google.js)
 //   GET  /__kite/data              your account's history, bookmarks, shortcuts, settings
 //   GET  /__kite/data/versions     just their versions (for "has anything changed?")
+//   GET  /__kite/devtools/check    may this Kite account use Kite DevTools?   (Kite UI only)
+//   GET  /__kite/devtools/events?since=N, /status; POST /settings, /clear
+//                                  Kite DevTools (accounts in KITE_DEVTOOLS_USERS only)
 //   PUT  /__kite/data/<name>       save one of them ({ value, base })     (signed-in Kite UI,
 //                                  or a linked Kite app with its token)
 //   POST /__kite/sync/link-code    a one-time code to link the Kite app  (signed-in Kite UI)
@@ -31,6 +34,7 @@
 import { sourcePage } from "./proxy.js";
 import { parseCookieExport, siteOf } from "./cookies.js";
 import { googleConfig, handleGoogle, takeGoogleResult } from "./google.js";
+import { hub, getSettings, setSettings, status as devtoolsStatus, devtoolsUsers } from "./devtools.js";
 import { ACCOUNT_DATA, putData, getData, getVersions, newLinkCode, useLinkCode, newToken, devices, unlink, resetLinkCodes, hashToken } from "./accountdata.js";
 
 const GOOGLE = googleConfig();
@@ -188,7 +192,7 @@ async function dataEndpoint(req, res, pathname, account, sessions, cors) {
 const hashTokenOf = (t) => hashToken(t);
 
 // Returns true if the request was a /__kite/ request (and has been answered).
-export async function handleKiteApi(req, res, { sessions, allowedOrigins = [], clientIp = "unknown" }) {
+export async function handleKiteApi(req, res, { sessions, allowedOrigins = [], clientIp = "unknown", devtools = hub }) {
   const { pathname } = new URL(req.url, "http://localhost");
   if (!pathname.startsWith(KITE_PREFIX)) return false;
   res.setHeader("x-kite-source", "kite");
@@ -256,7 +260,8 @@ export async function handleKiteApi(req, res, { sessions, allowedOrigins = [], c
   // The cookie manager: only for the Kite UI.
   if (pathname === "/__kite/cookies" || pathname === "/__kite/cookies/clear" || pathname === "/__kite/cookies/import" ||
     pathname === "/__kite/ticket" || pathname === "/__kite/account" || pathname.startsWith("/__kite/account/") ||
-    pathname === "/__kite/data" || pathname.startsWith("/__kite/data/") || pathname.startsWith("/__kite/sync/")) {
+    pathname === "/__kite/data" || pathname.startsWith("/__kite/data/") || pathname.startsWith("/__kite/sync/") ||
+    pathname.startsWith("/__kite/devtools/")) {
     const origin = req.headers.origin;
     let fromUi = false;
     try {
@@ -268,6 +273,29 @@ export async function handleKiteApi(req, res, { sessions, allowedOrigins = [], c
     }
     if (!fromUi) return send(res, 403, "Only the Kite UI can manage cookies."), true;
     const json = (status, value) => send(res, status, JSON.stringify(value), { ...cors, "content-type": "application/json" });
+    // Kite DevTools: the backend's log shows everyone's browsing, so only the
+    // Kite accounts named in KITE_DEVTOOLS_USERS.
+    if (pathname.startsWith("/__kite/devtools/")) {
+      const allowedUsers = devtoolsUsers();
+      const user = sessions.displayName(sessions.userOf(req));
+      const allowed = Boolean(user && allowedUsers.includes(String(user).toLowerCase()));
+      if (pathname === "/__kite/devtools/check") return json(200, { allowed, user, configured: allowedUsers.length > 0 }), true;
+      if (!allowed) return json(403, { error: allowedUsers.length ? "Your Kite account isn't allowed to use Kite DevTools." : "Kite DevTools is off: set KITE_DEVTOOLS_USERS on the backend." }), true;
+      const q = new URL(req.url, "http://localhost").searchParams;
+      if (pathname === "/__kite/devtools/events") return json(200, devtools.since(Number(q.get("since")) || 0, Math.min(2000, Number(q.get("limit")) || 500))), true;
+      if (pathname === "/__kite/devtools/status") return json(200, devtoolsStatus(sessions)), true;
+      if (req.method !== "POST") return send(res, 405, "", cors), true;
+      if (pathname === "/__kite/devtools/clear") return devtools.clear(), json(200, { ok: true }), true;
+      if (pathname === "/__kite/devtools/settings") {
+        let body = {};
+        try {
+          body = JSON.parse((await readBody(req, 4096)) || "{}");
+        } catch {}
+        return json(200, Object.keys(body).length ? setSettings(body) : getSettings()), true;
+      }
+      return send(res, 404, "", cors), true;
+    }
+
     // Your account's data, and linking the app (signed in only).
     if (pathname === "/__kite/data" || pathname.startsWith("/__kite/data/") || pathname.startsWith("/__kite/sync/")) {
       const user = sessions.userOf(req);
