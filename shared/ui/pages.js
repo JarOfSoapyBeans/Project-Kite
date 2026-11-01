@@ -250,6 +250,8 @@ function settings(root, ctx) {
   });
 
   const clearHistory = confirmButton("Clear browsing history", "Clear all of it? Click again", () => store.set("history", []));
+  const syncBox = ctx.sync ? el("div", {}) : null;
+  if (syncBox) drawSync(syncBox, ctx.sync);
   root.append(
     el("div", { className: "kp settings" },
       el("div", { className: "kp-head" }, el("h1", { textContent: "Settings" })),
@@ -265,10 +267,47 @@ function settings(root, ctx) {
         ctx.platformName === "app"
           ? el("p", { className: "muted", textContent: "Cookies and site data are per profile: use the padlock in the address bar to clear one site's, or a guest window (Ctrl+Shift+N) to leave nothing behind." })
           : el("p", { className: "muted", textContent: "Kite Web keeps history, bookmarks and settings in this browser." })),
+      syncBox ? section("Sync with a Kite account", syncBox) : null,
       ctx.hasProfiles ? section("Profiles", el("div", { className: "set-row" }, el("span", { textContent: "Profiles have their own history, bookmarks, logins and settings." }), el("button", { type: "button", textContent: "Manage profiles", onclick: () => ctx.action("profiles") }))) : null,
       section("About Kite", el("p", { className: "muted", textContent: `Kite ${ctx.platformName === "app" ? "app" : "Web"} • a browser of your own.` })))
   );
   return { refresh: () => null };
+}
+
+// The app: link this profile to a Kite account (with a code from Kite Web),
+// then its history, bookmarks, shortcuts and settings sync with it.
+async function drawSync(box, sync) {
+  const st = await sync.status();
+  box.textContent = "";
+  if (st.unavailable) {
+    box.append(el("p", { className: "muted", textContent: "Guest windows don't sync." }));
+    return;
+  }
+  if (st.linked) {
+    const when = st.lastSync ? new Date(st.lastSync).toLocaleString() : "not yet";
+    const msg = el("p", { className: "muted", textContent: st.error || `Last synced: ${when}` });
+    box.append(
+      el("div", { className: "set-row" },
+        el("span", {}, el("span", { textContent: `Synced with ${st.user}` }), el("small", { textContent: st.backend })),
+        el("span", { className: "row" },
+          el("button", { type: "button", textContent: "Sync now", onclick: async () => ((msg.textContent = "Syncing…"), await sync.now(), drawSync(box, sync)) }),
+          confirmButton("Unlink", "Unlink this profile? Click again", async () => (await sync.unlink(), drawSync(box, sync))))),
+      msg
+    );
+    return;
+  }
+  const backend = el("input", { placeholder: "Kite address, e.g. https://kite-api.example.com", spellcheck: false });
+  const code = el("input", { placeholder: "Code, e.g. ABCD-2345", spellcheck: false, maxLength: 12 });
+  const msg = el("p", { className: "muted", textContent: st.error || "In Kite Web, sign in to your Kite account, open the account panel (\u{1F464}) and click “Link the Kite app”. It shows the address and a code to enter here." });
+  const form = el("form", { className: "set-row sync-form" }, backend, code, el("button", { type: "submit", textContent: "Link" }));
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    msg.textContent = "Linking…";
+    const r = await sync.link(backend.value.trim(), code.value.trim());
+    if (r && r.error) msg.textContent = r.error;
+    else drawSync(box, sync);
+  });
+  box.append(form, msg);
 }
 
 const RENDER = { newtab: newTab, history, bookmarks, settings };

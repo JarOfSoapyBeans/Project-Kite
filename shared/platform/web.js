@@ -3,6 +3,7 @@
 // and title back with postMessage (see backend/proxy.js).
 
 import { initWebPanels } from "./web-panels.js";
+import { createWebData } from "./web-data.js";
 
 const NEW_TAB = "newtab.html";
 const viewsEl = document.getElementById("views");
@@ -59,6 +60,16 @@ async function checkBackend() {
   return backendOk;
 }
 
+const data = createWebData(backend);
+const ZOOMS = [0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5];
+const zooms = new Map(); // tab id -> zoom factor
+
+// Ask a tab's page (its injected Kite client) to do something.
+function tell(id, message) {
+  const f = frames.get(id);
+  if (f && f.contentWindow) f.contentWindow.postMessage({ kite: 1, ...message }, backendOrigin());
+}
+
 function idOfWindow(win) {
   for (const [id, f] of frames) if (f.contentWindow === win) return id;
   return null;
@@ -66,7 +77,11 @@ function idOfWindow(win) {
 
 const platform = {
   kind: "web",
-  features: { accounts: true, cookies: true, popout: true, backendSettings: true, menu: true },
+  features: {
+    accounts: true, cookies: true, popout: true, backendSettings: true, menu: true,
+    // done by the Kite client inside each page
+    find: true, zoom: true, print: true, siteInfo: true,
+  },
 
   start(ev) {
     events = ev;
@@ -83,14 +98,22 @@ const platform = {
         } catch {}
         return;
       }
-      if (d.type !== "page") return;
       const id = idOfWindow(e.source);
-      if (id !== null) events.pageChanged(id, { url: String(d.url), title: String(d.title || ""), loading: false });
+      if (id === null) return;
+      if (d.type === "find") return events.find(id, Number(d.active) || 0, Number(d.total) || 0);
+      if (d.type === "zoom") return events.zoom(id, Math.round(Number(d.percent) || 100));
+      if (d.type !== "page") return;
+      const url = String(d.url);
+      frames.get(id).dataset.url = url;
+      events.pageChanged(id, { url, title: String(d.title || ""), loading: false, security: /^https:/i.test(url) ? "secure" : "insecure" });
+      // A new page keeps the tab's zoom.
+      if ((zooms.get(id) || 1) !== 1) tell(id, { cmd: "zoom", factor: zooms.get(id) });
     });
     checkBackend();
     initWebPanels({
       backend,
       reloadAll: () => events.reloadAll(),
+      accountChanged: (user) => data.accountChanged(user),
       resetBackend: () => {
         backendOk = false;
         ticket = null;
@@ -119,6 +142,7 @@ const platform = {
     const f = frames.get(id);
     if (f) f.remove();
     frames.delete(id);
+    zooms.delete(id);
   },
 
   showView(id) {
@@ -137,6 +161,7 @@ const platform = {
       events.pageChanged(id, { loading: false });
       return;
     }
+    f.dataset.url = url;
     f.src = proxied(url, await getTicket());
   },
 
@@ -146,6 +171,7 @@ const platform = {
     const f = frames.get(id);
     const w = f && f.contentWindow;
     if (!w) return;
+    if (cmd === "print") return tell(id, { cmd: "print" });
     try {
       if (cmd === "back") w.history.back();
       else if (cmd === "forward") w.history.forward();
@@ -155,29 +181,48 @@ const platform = {
     }
   },
 
-  // History, bookmarks, settings...: kept in this browser for now.
-  async loadData(name) {
+  // History, bookmarks, settings...: in your Kite account when signed in,
+  // otherwise in this browser (see web-data.js).
+  loadData: (name) => data.load(name),
+  saveData: (name, value) => data.save(name, value),
+  onDataChanged: (fn) => data.onChange(fn),
+
+  // Find, zoom, print: the Kite client inside the page does them.
+  find: (id, text, opts = {}) => tell(id, { cmd: "find", text: String(text || ""), forward: opts.forward !== false, findNext: Boolean(opts.findNext) }),
+  stopFind: (id) => tell(id, { cmd: "stop-find" }),
+  zoom(id, dir) {
+    const now = zooms.get(id) || 1;
+    let next = 1;
+    if (dir === "in") next = ZOOMS.find((z) => z > now + 0.001) || ZOOMS[ZOOMS.length - 1];
+    else if (dir === "out") next = [...ZOOMS].reverse().find((z) => z < now - 0.001) || ZOOMS[0];
+    zooms.set(id, next);
+    tell(id, { cmd: "zoom", factor: next });
+  },
+
+  // The padlock: Kite Web shows the site's address and connection; site
+  // permissions (camera...) are your browser's own, for Kite's address.
+  async siteInfo(id) {
+    const f = frames.get(id);
+    const tabUrl = f && f.dataset.url;
+    let origin = null;
     try {
-      return JSON.parse(localStorage.getItem("kite:" + name) || "null");
-    } catch {
-      return null;
-    }
+      origin = new URL(tabUrl).origin;
+    } catch {}
+    return { origin, security: /^https:/i.test(tabUrl || "") ? "secure" : "insecure", permissions: {} };
   },
-  async saveData(name, value) {
+  async clearSite(id) {
+    const f = frames.get(id);
     try {
-      localStorage.setItem("kite:" + name, JSON.stringify(value));
-    } catch {} // full or blocked: keep going without saving
+      const host = new URL(f.dataset.url).hostname;
+      await fetch(backend() + "/__kite/cookies/clear", {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ site: host }).toString(),
+      });
+    } catch {}
   },
-  // Other Kite Web tabs in this browser changed something.
-  onDataChanged(fn) {
-    window.addEventListener("storage", (e) => {
-      if (e.key && e.key.startsWith("kite:")) {
-        try {
-          fn(e.key.slice(5), JSON.parse(e.newValue || "null"));
-        } catch {}
-      }
-    });
-  },
+  resetPermissions: (id) => platform.siteInfo(id),
 
   // Open the page outside Kite's frame, in a real browser window (still through
   // Kite). There, a crashed page shows the browser's own error page and code.

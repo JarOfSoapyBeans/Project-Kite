@@ -14,6 +14,13 @@
 //   POST /__kite/account/signout   back to a guest session            (Kite UI only)
 //   POST /__kite/account/google    collect a finished Google sign-in  (Kite UI only)
 //   GET  /__kite/google/start, /__kite/google/callback   the Google sign-in popup (google.js)
+//   GET  /__kite/data              your account's history, bookmarks, shortcuts, settings
+//   PUT  /__kite/data/<name>       save one of them ({ value, base })     (signed-in Kite UI,
+//                                  or a linked Kite app with its token)
+//   POST /__kite/sync/link-code    a one-time code to link the Kite app  (signed-in Kite UI)
+//   GET  /__kite/sync/devices      linked apps; POST /__kite/sync/unlink  (signed-in Kite UI)
+//   POST /__kite/sync/token        the app trades a code for its token   (anyone, rate limited)
+//   POST /__kite/sync/unlink-self  the app unlinks itself                (its token)
 //   POST /__kite/account/signout-everywhere                           (Kite UI only)
 //
 // Proxied pages all live on the backend's address, so the cookie manager only
@@ -21,8 +28,9 @@
 // a page Kite is showing.
 
 import { sourcePage } from "./proxy.js";
-import { parseCookieExport } from "./cookies.js";
+import { parseCookieExport, siteOf } from "./cookies.js";
 import { googleConfig, handleGoogle, takeGoogleResult } from "./google.js";
+import { ACCOUNT_DATA, putData, getData, newLinkCode, useLinkCode, newToken, devices, unlink, resetLinkCodes, hashToken } from "./accountdata.js";
 
 const GOOGLE = googleConfig();
 
@@ -128,12 +136,54 @@ function signupAllowed(ip) {
   signups.set(ip, list);
   return list.length < 5;
 }
+// Linking the app: at most 10 code tries per address per 10 minutes.
+const codeTries = new Map(); // ip -> [times]
+function codeTryAllowed(ip) {
+  const now = Date.now();
+  const list = (codeTries.get(ip) || []).filter((t) => now - t < 600_000);
+  list.push(now);
+  codeTries.set(ip, list);
+  return list.length <= 10;
+}
+
 // For tests.
 export function resetLimits() {
   failures.clear();
   signups.clear();
+  codeTries.clear();
+  resetLinkCodes();
+}
+
+// The Kite app (a linked device) proves who it is with "Authorization: Bearer <token>".
+function bearer(req) {
+  const m = /^Bearer\s+([A-Za-z0-9_-]{20,100})$/.exec(String(req.headers.authorization || ""));
+  return m ? m[1] : null;
 }
 const SIGNUP_ON = process.env.KITE_SIGNUP !== "0";
+
+// GET /__kite/data, PUT /__kite/data/<name> for one account.
+async function dataEndpoint(req, res, pathname, account, sessions, cors) {
+  const json = (status, value) => send(res, status, JSON.stringify(value), { ...cors, "content-type": "application/json" });
+  if (pathname === "/__kite/data") return json(200, getData(account));
+  const name = pathname.slice("/__kite/data/".length);
+  if (!ACCOUNT_DATA.has(name)) return json(404, { error: "unknown data" });
+  if (req.method === "GET") return json(200, (account.data && account.data[name]) || { value: null, updated: 0 });
+  if (req.method !== "PUT") return send(res, 405, "", cors);
+  const text = await readBody(req, 5 * 1024 * 1024);
+  if (text === null) return json(413, { error: "too big" });
+  let body;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return json(400, { error: "not JSON" });
+  }
+  const r = putData(account, name, body.value, body.base);
+  if (r.error) return json(400, { error: r.error });
+  sessions.changed();
+  return json(200, r.merged ? { updated: r.updated, value: r.value } : { updated: r.updated });
+}
+
+const hashTokenOf = (t) => hashToken(t);
 
 // Returns true if the request was a /__kite/ request (and has been answered).
 export async function handleKiteApi(req, res, { sessions, allowedOrigins = [], clientIp = "unknown" }) {
@@ -172,9 +222,39 @@ export async function handleKiteApi(req, res, { sessions, allowedOrigins = [], c
     return true;
   }
 
+  // ---------- the Kite app (linked with a token) ----------
+  const token = bearer(req);
+  if (pathname === "/__kite/sync/token") {
+    if (req.method !== "POST") return send(res, 405), true;
+    if (!codeTryAllowed(clientIp)) return send(res, 429, JSON.stringify({ error: "Too many tries. Wait a few minutes." }), { "content-type": "application/json" }), true;
+    let body = {};
+    try {
+      body = JSON.parse((await readBody(req, 2048)) || "{}");
+    } catch {}
+    const user = useLinkCode(body.code);
+    const account = sessions.account(user);
+    if (!account) return send(res, 400, JSON.stringify({ error: "That code is wrong or has expired. Make a new one in Kite Web." }), { "content-type": "application/json" }), true;
+    const t = newToken(account, body.device);
+    sessions.changed();
+    console.log(`[info] Kite app linked to account ${sessions.displayName(user)}`);
+    return send(res, 200, JSON.stringify({ token: t, user: sessions.displayName(user) }), { "content-type": "application/json" }), true;
+  }
+  if (token && (pathname === "/__kite/data" || pathname.startsWith("/__kite/data/") || pathname === "/__kite/sync/unlink-self")) {
+    const user = sessions.userForToken(token);
+    const account = sessions.account(user);
+    if (!account) return send(res, 401, JSON.stringify({ error: "This app isn't linked any more." }), { "content-type": "application/json" }), true;
+    if (pathname === "/__kite/sync/unlink-self") {
+      account.tokens = (account.tokens || []).filter((t) => t.hash !== hashTokenOf(token));
+      sessions.changed();
+      return send(res, 204), true;
+    }
+    return dataEndpoint(req, res, pathname, account, sessions, {}), true;
+  }
+
   // The cookie manager: only for the Kite UI.
   if (pathname === "/__kite/cookies" || pathname === "/__kite/cookies/clear" || pathname === "/__kite/cookies/import" ||
-    pathname === "/__kite/ticket" || pathname === "/__kite/account" || pathname.startsWith("/__kite/account/")) {
+    pathname === "/__kite/ticket" || pathname === "/__kite/account" || pathname.startsWith("/__kite/account/") ||
+    pathname === "/__kite/data" || pathname.startsWith("/__kite/data/") || pathname.startsWith("/__kite/sync/")) {
     const origin = req.headers.origin;
     let fromUi = false;
     try {
@@ -182,10 +262,33 @@ export async function handleKiteApi(req, res, { sessions, allowedOrigins = [], c
     } catch {}
     const cors = fromUi ? { "access-control-allow-origin": origin, "access-control-allow-credentials": "true", vary: "Origin" } : {};
     if (req.method === "OPTIONS") {
-      return send(res, fromUi ? 204 : 403, "", { ...cors, "access-control-allow-methods": "GET, POST", "access-control-allow-headers": "content-type" }), true;
+      return send(res, fromUi ? 204 : 403, "", { ...cors, "access-control-allow-methods": "GET, POST, PUT", "access-control-allow-headers": "content-type" }), true;
     }
     if (!fromUi) return send(res, 403, "Only the Kite UI can manage cookies."), true;
     const json = (status, value) => send(res, status, JSON.stringify(value), { ...cors, "content-type": "application/json" });
+    // Your account's data, and linking the app (signed in only).
+    if (pathname === "/__kite/data" || pathname.startsWith("/__kite/data/") || pathname.startsWith("/__kite/sync/")) {
+      const user = sessions.userOf(req);
+      const account = sessions.account(user);
+      if (!account) return json(401, { error: "Sign in to your Kite account first." }), true;
+      if (pathname === "/__kite/sync/link-code") {
+        if (req.method !== "POST") return send(res, 405, "", cors), true;
+        return json(200, newLinkCode(user)), true;
+      }
+      if (pathname === "/__kite/sync/devices") return json(200, { devices: devices(account) }), true;
+      if (pathname === "/__kite/sync/unlink") {
+        if (req.method !== "POST") return send(res, 405, "", cors), true;
+        let body = {};
+        try {
+          body = JSON.parse((await readBody(req, 1024)) || "{}");
+        } catch {}
+        unlink(account, String(body.id || ""));
+        sessions.changed();
+        return json(200, { devices: devices(account) }), true;
+      }
+      if (pathname.startsWith("/__kite/sync/")) return send(res, 404, "", cors), true;
+      return dataEndpoint(req, res, pathname, account, sessions, cors), true;
+    }
     if (pathname === "/__kite/account" || pathname.startsWith("/__kite/account/")) {
       if (pathname === "/__kite/account") {
         sessions.jarFor(req, res); // every visitor has a (guest) session
@@ -261,7 +364,7 @@ export async function handleKiteApi(req, res, { sessions, allowedOrigins = [], c
     if (pathname === "/__kite/cookies/clear") {
       if (req.method !== "POST") return send(res, 405, "", cors), true;
       const site = new URLSearchParams((await readBody(req, 1024)) || "").get("site");
-      jar.clear(site || undefined);
+      jar.clear(site ? siteOf(site) : undefined); // "www.youtube.com" clears youtube.com's cookies
       sessions.changed();
     }
     return send(res, 200, JSON.stringify({ sites: jar.summary() }), { ...cors, "content-type": "application/json" }), true;

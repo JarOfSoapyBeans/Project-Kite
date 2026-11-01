@@ -23,6 +23,7 @@ const {
 const { Profiles } = require("./lib/profiles.js");
 const { SitePermissions, attachPermissions, originOf } = require("./lib/permissions.js");
 const { Downloads } = require("./lib/downloads.js");
+const { Sync } = require("./lib/sync.js");
 const { pageMenu, tabMenu, appMenu } = require("./lib/menus.js");
 
 const UI_DIR = path.join(__dirname, "app-ui");
@@ -510,14 +511,30 @@ function dataFile(profileId, name) {
   return path.join(app.getPath("userData"), "profile-data", profileId, name + ".json");
 }
 
-function loadData(profile, name) {
-  if (!DATA_NAMES.has(name)) return null;
-  if (profile.guest) return (guestData.get(profile.id) || new Map()).get(name) ?? null;
+function readFile(profileId, name) {
   try {
-    return JSON.parse(fs.readFileSync(dataFile(profile.id, name), "utf8"));
+    return JSON.parse(fs.readFileSync(dataFile(profileId, name), "utf8"));
   } catch {
     return null;
   }
+}
+
+function writeFile(profileId, name, value) {
+  const file = dataFile(profileId, name);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file + ".tmp", JSON.stringify(value ?? null));
+  fs.renameSync(file + ".tmp", file);
+}
+
+// Tell a profile's windows (except one) that some of its data changed.
+function dataChanged(profileId, name, value, except = null) {
+  for (const w of windows) if (w !== except && w.profile.id === profileId) w.send({ type: "data", name, value });
+}
+
+function loadData(profile, name) {
+  if (!DATA_NAMES.has(name)) return null;
+  if (profile.guest) return (guestData.get(profile.id) || new Map()).get(name) ?? null;
+  return readFile(profile.id, name);
 }
 
 function saveData(kw, name, value) {
@@ -525,19 +542,20 @@ function saveData(kw, name, value) {
   const text = JSON.stringify(value ?? null);
   if (text.length > MAX_DATA) return false;
   const profile = kw.profile;
+  value = JSON.parse(text);
   if (profile.guest) {
     if (!guestData.has(profile.id)) guestData.set(profile.id, new Map());
-    guestData.get(profile.id).set(name, JSON.parse(text));
+    guestData.get(profile.id).set(name, value);
   } else {
-    const file = dataFile(profile.id, name);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file + ".tmp", text);
-    fs.renameSync(file + ".tmp", file);
+    writeFile(profile.id, name, value);
+    sync.noteChange(profile.id, name); // linked to a Kite account: send it soon
   }
-  // The profile's other windows see the change.
-  for (const w of windows) if (w !== kw && w.profile.id === profile.id) w.send({ type: "data", name, value: JSON.parse(text) });
+  dataChanged(profile.id, name, value, kw); // the profile's other windows see the change
   return true;
 }
+
+// Syncing profiles with a Kite account (lib/sync.js). Guests never sync.
+let sync = { noteChange() {} };
 
 // ---------- the interface's requests ----------
 
@@ -607,6 +625,7 @@ function wireIpc() {
     permsByProfile.delete(id);
     fs.rmSync(path.join(app.getPath("userData"), `permissions-${id}.json`), { force: true });
     fs.rmSync(path.join(app.getPath("userData"), "profile-data", id), { recursive: true, force: true });
+    await sync.unlink(id).catch(() => {});
     return true;
   });
   on("profiles:open", (_kw, id) => openProfile(String(id)));
@@ -618,6 +637,10 @@ function wireIpc() {
     return urls;
   });
   on("data:load", (kw, name) => loadData(kw.profile, String(name)));
+  on("sync:status", (kw) => (kw.profile.guest ? { unavailable: true } : sync.status(kw.profile.id)));
+  on("sync:link", (kw, backend, code) => (kw.profile.guest ? { error: "Guest windows don't sync." } : sync.link(kw.profile.id, String(backend), String(code))));
+  on("sync:unlink", (kw) => (kw.profile.guest ? { unavailable: true } : sync.unlink(kw.profile.id)));
+  on("sync:now", (kw) => (kw.profile.guest ? { unavailable: true } : sync.syncNow(kw.profile.id)));
   on("data:save", (kw, name, value) => saveData(kw, String(name), value));
   on("ui:inset", (kw, px) => {
     kw.inset = Math.max(0, Math.min(600, Math.round(n(px) || 0)));
@@ -659,6 +682,16 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(() => {
     profiles = new Profiles(app.getPath("userData"));
+    sync = new Sync({
+      dir: app.getPath("userData"),
+      read: readFile,
+      write: writeFile,
+      changed: (profileId, name, value) => dataChanged(profileId, name, value),
+    });
+    for (const p of profiles.list()) {
+      sync.start(p.id);
+      if (sync.status(p.id).linked) sync.syncNow(p.id);
+    }
     downloads = new Downloads({ dir: () => app.getPath("downloads"), shell });
     downloads.on("changed", (profileId) => {
       for (const kw of windows) if (kw.profile.id === profileId) kw.send({ type: "downloads", list: downloads.list(profileId) });

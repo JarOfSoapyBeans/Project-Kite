@@ -269,7 +269,7 @@ export function initFeatures(kite) {
     "zoom-out": () => zoom("out"),
     "zoom-reset": () => zoom("reset"),
     print: () => has("print") && kite.activeTab() && !kite.activeTab().page && platform.command(kite.activeTab().id, "print"),
-    pdf: () => has("print") && kite.activeTab() && !kite.activeTab().page && platform.savePdf(kite.activeTab().id),
+    pdf: () => has("print") && platform.savePdf && kite.activeTab() && !kite.activeTab().page && platform.savePdf(kite.activeTab().id),
     downloads: toggleDownloads,
     profiles: () => has("profiles") && openPanel($("profile-panel"), true) && renderProfiles(),
     "new-window": () => has("windows") && platform.newWindow(),

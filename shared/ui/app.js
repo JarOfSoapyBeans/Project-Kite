@@ -321,6 +321,7 @@ const pageContext = {
   action: (name) => runShortcut(name),
   favicons: Boolean(platform.features.favicons),
   hasProfiles: Boolean(platform.features.profiles),
+  sync: platform.sync || null, // the app: syncing with a Kite account
   platformName: platform.kind === "desktop" ? "app" : "web",
 };
 

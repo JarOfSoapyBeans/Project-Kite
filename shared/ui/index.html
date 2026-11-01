@@ -111,6 +111,16 @@
             <button type="button" id="account-signout">Sign out</button>
             <button type="button" id="account-signout-all">Sign out everywhere</button>
           </div>
+          <div class="panel-head link-app">
+            <span class="muted">Your history, bookmarks and settings are kept in your account. Sync them with the Kite app too:</span>
+            <button type="button" id="link-app">Link the Kite app</button>
+          </div>
+          <div id="link-app-box" hidden>
+            <p>In the Kite app, open <strong>Settings</strong> &rarr; <strong>Sync with a Kite account</strong> and enter:</p>
+            <p class="link-code"><span>Kite address</span><code id="link-backend"></code></p>
+            <p class="link-code"><span>Code</span><code id="link-code"></code><span class="muted" id="link-expiry"></span></p>
+          </div>
+          <ul id="linked-apps"></ul>
         </div>
       </div>
       <div id="cookie-panel" hidden>

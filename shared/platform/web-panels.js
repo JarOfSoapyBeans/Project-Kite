@@ -2,7 +2,7 @@
 // on the backend (list, clear, import), and the backend's address. The Kite app
 // doesn't need these: it has real browser profiles instead.
 
-export function initWebPanels({ backend, reloadAll, resetBackend }) {
+export function initWebPanels({ backend, reloadAll, resetBackend, accountChanged = () => {} }) {
   // ---------- cookies (Stage 4) ----------
   // Sites' cookies live in a jar on the Kite backend. This panel lists them and
   // lets you clear them; it talks to the backend directly (not through a tab).
@@ -82,6 +82,7 @@ export function initWebPanels({ backend, reloadAll, resetBackend }) {
 
   function showAccount(user, signupOn = true, googleOn = undefined) {
     if (googleOn !== undefined) document.getElementById("account-google").hidden = !googleOn;
+    if (user !== currentUser) accountChanged(user); // history, bookmarks... come from the account now
     currentUser = user;
     accountBtn.classList.toggle("signed-in", Boolean(user));
     accountBtn.title = user ? `Signed in as ${user}` : "Kite account (guest)";
@@ -177,6 +178,44 @@ export function initWebPanels({ backend, reloadAll, resetBackend }) {
   document.getElementById("account-signout-all").addEventListener("click", () => {
     if (confirm("Sign out of your Kite account on every device?")) accountAction("/signout-everywhere", {});
   });
+
+  // Linking the Kite app to this account (a one-time code), and the linked apps.
+  async function renderLinkedApps() {
+    const ul = document.getElementById("linked-apps");
+    ul.textContent = "";
+    if (!currentUser) return;
+    let list = [];
+    try {
+      list = (await accountApi("/../sync/devices")).devices || [];
+    } catch {}
+    for (const d of list) {
+      const li = document.createElement("li");
+      const label = document.createElement("span");
+      label.textContent = `${d.device} — linked ${new Date(d.created).toLocaleDateString()}` + (d.lastUsed ? `, last synced ${new Date(d.lastUsed).toLocaleString()}` : "");
+      const unlink = document.createElement("button");
+      unlink.type = "button";
+      unlink.textContent = "Unlink";
+      unlink.addEventListener("click", async () => {
+        await accountApi("/../sync/unlink", { id: d.id }).catch(() => {});
+        renderLinkedApps();
+      });
+      li.append(label, unlink);
+      ul.append(li);
+    }
+  }
+  document.getElementById("link-app").addEventListener("click", async () => {
+    const box = document.getElementById("link-app-box");
+    try {
+      const { code, expires } = await accountApi("/../sync/link-code", {});
+      document.getElementById("link-backend").textContent = backend();
+      document.getElementById("link-code").textContent = code;
+      document.getElementById("link-expiry").textContent = `works once, until ${new Date(expires).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+      box.hidden = false;
+    } catch (err) {
+      accountMsg.textContent = err.message;
+    }
+  });
+  accountBtn.addEventListener("click", () => !accountPanel.hidden && renderLinkedApps());
 
   async function loadAccount() {
     try {

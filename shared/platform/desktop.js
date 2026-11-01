@@ -57,6 +57,13 @@ const platform = {
   loadData: (name) => bridge.loadData(name),
   saveData: (name, value) => bridge.saveData(name, value),
   onDataChanged: (fn) => (dataListener = fn),
+  // Syncing this profile with a Kite account (Settings).
+  sync: {
+    status: () => bridge.syncStatus(),
+    link: (backend, code) => bridge.syncLink(backend, code),
+    unlink: () => bridge.syncUnlink(),
+    now: () => bridge.syncNow(),
+  },
 
   find: (id, text, opts) => bridge.find(id, text, opts),
   stopFind: (id) => bridge.stopFind(id),

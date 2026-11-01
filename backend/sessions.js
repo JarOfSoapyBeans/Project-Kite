@@ -13,6 +13,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { CookieJar } from "./cookies.js";
+import { hashToken } from "./accountdata.js";
 
 export const SESSION_COOKIE = "kite_sid";
 const IDLE_MS = 30 * 24 * 3600 * 1000; // forget sessions unused for 30 days
@@ -111,6 +112,25 @@ export class Sessions {
     return s && s.user && this.accounts.has(s.user) ? s.user : null;
   }
 
+  // The account (object) for a username.
+  account(user) {
+    return (user && this.accounts.get(user)) || null;
+  }
+
+  // The username a Kite app's sync token belongs to (and notes its use), or null.
+  userForToken(token) {
+    if (!token) return null;
+    const h = hashToken(token);
+    for (const [name, a] of this.accounts) {
+      const t = (a.tokens || []).find((x) => x.hash === h);
+      if (t) {
+        t.lastUsed = Date.now();
+        return name;
+      }
+    }
+    return null;
+  }
+
   // What the Kite UI shows for an account: the username, or a Google email.
   displayName(user) {
     const a = this.accounts.get(user);
@@ -202,9 +222,10 @@ export class Sessions {
       data.sessions[id] = s.user ? { lastUsed: s.lastUsed, user: s.user } : { lastUsed: s.lastUsed, cookies: s.jar.toJSON() };
     }
     for (const [name, a] of this.accounts) {
+      const extra = { data: a.data || {}, tokens: a.tokens || [] }; // history, bookmarks... and linked apps
       data.accounts[name] = a.google
-        ? { google: a.google, email: a.email, created: a.created, cookies: a.jar.toJSON() }
-        : { salt: a.salt, hash: a.hash, created: a.created, cookies: a.jar.toJSON() };
+        ? { google: a.google, email: a.email, created: a.created, cookies: a.jar.toJSON(), ...extra }
+        : { salt: a.salt, hash: a.hash, created: a.created, cookies: a.jar.toJSON(), ...extra };
     }
     const tmp = this.file + ".tmp";
     try {
@@ -221,8 +242,9 @@ export class Sessions {
       const now = Date.now();
       for (const [name, a] of Object.entries(data.accounts || {})) {
         if (!USERNAME.test(name)) continue;
-        if (a.google) this.accounts.set(name, { google: a.google, email: a.email, created: a.created, jar: CookieJar.fromJSON(a.cookies) });
-        else if (a.salt && a.hash) this.accounts.set(name, { salt: a.salt, hash: a.hash, created: a.created, jar: CookieJar.fromJSON(a.cookies) });
+        const extra = { data: a.data || {}, tokens: Array.isArray(a.tokens) ? a.tokens : [] };
+        if (a.google) this.accounts.set(name, { google: a.google, email: a.email, created: a.created, jar: CookieJar.fromJSON(a.cookies), ...extra });
+        else if (a.salt && a.hash) this.accounts.set(name, { salt: a.salt, hash: a.hash, created: a.created, jar: CookieJar.fromJSON(a.cookies), ...extra });
       }
       for (const [id, s] of Object.entries(data.sessions || {})) {
         if (now - s.lastUsed >= IDLE_MS) continue;

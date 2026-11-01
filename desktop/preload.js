@@ -36,6 +36,11 @@ contextBridge.exposeInMainWorld("kiteDesktop", {
   // history, bookmarks, settings... for this window's profile
   loadData: call("data:load"),
   saveData: call("data:save"),
+  // syncing this profile with a Kite account
+  syncStatus: call("sync:status"),
+  syncLink: call("sync:link"),
+  syncUnlink: call("sync:unlink"),
+  syncNow: call("sync:now"),
   // menus (real system menus; resolve to what was picked)
   tabMenu: call("menu:tab"),
   appMenu: call("menu:app"),

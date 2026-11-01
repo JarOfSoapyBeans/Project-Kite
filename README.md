@@ -37,7 +37,7 @@ shared/            the browser interface and logic, written once
 frontend/          Kite Web: `npm run build` assembles shared/ into frontend/dist
 backend/           the proxy that powers Kite Web
 desktop/           the Kite app (Electron): main.js, preload.js, view-preload.js,
-  lib/               profiles, site permissions, downloads, menus
+  lib/               profiles, site permissions, downloads, menus, sync
   pages/             the app's own pages (error.html)
 ```
 
@@ -81,7 +81,23 @@ no backend and no rewriting. What the app has:
   bookmarks bar, keeping history.
 
 The app keeps these per profile (`profile-data` in its folder; guest windows keep
-nothing). Kite Web keeps them in the browser you use it in.
+nothing). Kite Web keeps them in your **Kite account** when you're signed in (so
+they follow you to every device), otherwise in the browser you use it in.
+
+### Syncing the app with your Kite account
+
+1. In Kite Web, sign in, open the account panel (👤) and click **Link the Kite app**.
+   It shows your Kite address and a one-time code (valid 10 minutes).
+2. In the app: **Settings → Sync with a Kite account**, enter both, **Link**.
+
+That profile's history, bookmarks, new tab shortcuts and settings then sync at
+start, every 2 minutes and a few seconds after a change. If both sides changed,
+history and bookmarks keep both sides' additions; for settings the newest wins.
+Linked apps are listed in Kite Web's account panel, where you can unlink them.
+The backend stores only a hash of each app's token.
+
+Kite Web also has **find in page** (Ctrl+F), **zoom** and **print** now (done by
+Kite's script inside the page), and a padlock showing the real site.
 
 Where the app keeps things: `%APPDATA%\kite-desktop` on Windows (profiles.json,
 permissions-*.json and the profiles' browser data).

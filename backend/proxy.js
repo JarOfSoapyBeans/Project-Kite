@@ -1259,7 +1259,48 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
     if (d.cmd === "back") history.back();
     else if (d.cmd === "forward") history.forward();
     else if (d.cmd === "reload") location.reload();
+    else if (d.cmd === "print") window.print();
+    else if (d.cmd === "zoom") {
+      var z = Number(d.factor) || 1;
+      document.documentElement.style.zoom = z === 1 ? "" : String(z);
+      post({ kite: 1, type: "zoom", percent: Math.round(z * 100) });
+    } else if (d.cmd === "find") findInPage(String(d.text || ""), d.forward !== false, Boolean(d.findNext));
+    else if (d.cmd === "stop-find") {
+      findState = { text: "", active: 0, total: 0 };
+      try { getSelection().removeAllRanges(); } catch (e) {}
+    }
   });
+
+  // Find in page for Kite Web (Ctrl+F in Kite's toolbar): selects each match in
+  // turn and reports "3/10" back.
+  var findState = { text: "", active: 0, total: 0 };
+  function countMatches(text) {
+    var hay = (document.body ? document.body.innerText : "").toLowerCase();
+    var needle = text.toLowerCase();
+    var n = 0;
+    for (var i = hay.indexOf(needle); needle && i >= 0; i = hay.indexOf(needle, i + needle.length)) n++;
+    return n;
+  }
+  function findInPage(text, forward, next) {
+    var sel = null;
+    try { sel = getSelection(); } catch (e) {}
+    if (!text) {
+      findState = { text: "", active: 0, total: 0 };
+      if (sel) sel.removeAllRanges();
+      return post({ kite: 1, type: "find", active: 0, total: 0 });
+    }
+    if (!next || text !== findState.text) {
+      // A new search starts at the top of the page.
+      findState = { text: text, active: 0, total: countMatches(text) };
+      if (sel) sel.removeAllRanges();
+      forward = true;
+    }
+    var found = false;
+    try { found = window.find(text, false, !forward, true, false, false, false); } catch (e) {}
+    var t = findState.total;
+    if (found && t) findState.active = forward ? (findState.active % t) + 1 : ((findState.active - 2 + t) % t) + 1;
+    post({ kite: 1, type: "find", active: found ? findState.active : 0, total: t });
+  }
 
   disguise(); // last: every replaced browser function now reports the original's text
 }

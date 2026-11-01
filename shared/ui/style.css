@@ -182,3 +182,18 @@ body { display: flex; flex-direction: column; }
 .set-row small { color: var(--muted); font-size: 12px; }
 .set-row input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); }
 .set-row input:not([type=checkbox]) { width: 320px; }
+
+/* Kite Web: linking the app */
+#account-panel .link-app { margin-top: 8px; }
+#link-app-box { margin-top: 8px; padding: 8px 12px; background: var(--tab); border-radius: 8px; }
+#link-app-box p { margin: 4px 0; }
+.link-code { display: flex; align-items: center; gap: 10px; }
+.link-code span:first-child { width: 90px; color: var(--muted); font-size: 13px; }
+.link-code code { font-size: 15px; padding: 2px 8px; background: var(--bg); border-radius: 6px; user-select: all; }
+#link-code { font-size: 20px !important; letter-spacing: 2px; }
+#linked-apps { list-style: none; margin: 8px 0 0; padding: 0; }
+#linked-apps li { display: flex; gap: 10px; align-items: center; padding: 4px 0; font-size: 13px; }
+#linked-apps li span { flex: 1; }
+.sync-form { gap: 8px !important; justify-content: flex-start !important; }
+.sync-form input { width: auto !important; flex: 1; }
+.settings .row { display: flex; gap: 8px; }
