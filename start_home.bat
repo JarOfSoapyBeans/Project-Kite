@@ -28,6 +28,10 @@ set START_FRONTEND=1
 rem Port the backend listens on.
 set PORT=8080
 
+rem 1 = rewrite page scripts so they see their real address (Stage 5).
+rem 0 = don't (for testing whether a broken page is caused by it).
+set KITE_JS_REWRITE=1
+
 rem ------------------------------------------------------------------
 
 rem Behind a Cloudflare Tunnel: take visitors' real IPs from Cloudflare.

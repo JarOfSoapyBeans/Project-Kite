@@ -11,7 +11,7 @@ import net from "node:net";
 import zlib from "node:zlib";
 import { promisify } from "node:util";
 import { requestContext } from "./cookies.js";
-import { kiteRenamer, rewriteJs } from "./jsrewrite.js";
+import { kiteRenamer, rewriteJs, JS_REWRITE_ON } from "./jsrewrite.js";
 
 export const PREFIX = "/proxy/";
 export const TICKET_PARAM = "__kite_t"; // the Kite UI's tab ticket; never sent to sites
@@ -304,7 +304,7 @@ export function rewriteHtml(html, pageUrl, { allowedOrigins = [], scriptCookies 
   const json = (v) => JSON.stringify(v).replace(/</g, "\\u003c");
   const inject =
     `<script data-kite>(${kiteClient.toString()})(${json(pageUrl)},${json(allowedOrigins)},${json(scriptCookies)},` +
-    `${kiteRenamer.toString()});</script>`;
+    `${JS_REWRITE_ON ? kiteRenamer.toString() : "null"});</script>`;
   const head = /<head\b[^>]*>/i.exec(out);
   const at = head ? head.index + head[0].length : /^\s*(?:<!doctype[^>]*>)?/i.exec(out)[0].length;
   return out.slice(0, at) + inject + out.slice(at);

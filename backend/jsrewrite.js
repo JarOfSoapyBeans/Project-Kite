@@ -314,7 +314,12 @@ const cache = new Map();
 let cacheBytes = 0;
 const CACHE_LIMIT = 64 * 1024 * 1024;
 
+// KITE_JS_REWRITE=0 turns Stage 5's script rewriting off (for finding out whether
+// a broken page is caused by it).
+export const JS_REWRITE_ON = typeof process === "undefined" || process.env.KITE_JS_REWRITE !== "0";
+
 export function rewriteJs(src, options = {}) {
+  if (!JS_REWRITE_ON) return src;
   if (src.length < 2048) return rewriteJsUncached(src, options);
   const key = (options.asFunctionBody ? "f:" : "s:") + crypto.createHash("sha1").update(src).digest("base64");
   const hit = cache.get(key);
