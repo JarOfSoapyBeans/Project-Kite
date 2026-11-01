@@ -8,6 +8,11 @@
 //   POST /__kite/cookies/clear     forget cookies (all, or one site)  (Kite UI only)
 //   POST /__kite/cookies/import    add cookies exported from a browser (Kite UI only)
 //   GET  /__kite/ticket            a pass for loading pages in tabs   (Kite UI only)
+//   GET  /__kite/account           who is signed in                   (Kite UI only)
+//   POST /__kite/account/signup    create a Kite account and sign in  (Kite UI only)
+//   POST /__kite/account/signin    sign in                            (Kite UI only)
+//   POST /__kite/account/signout   back to a guest session            (Kite UI only)
+//   POST /__kite/account/signout-everywhere                           (Kite UI only)
 //
 // Proxied pages all live on the backend's address, so the cookie manager only
 // answers cross-origin requests from your Kite frontend (ALLOWED_ORIGINS), never
@@ -96,8 +101,37 @@ function printReports(body) {
   }
 }
 
+// Slowing down password guessing: after 5 wrong tries from one address, or for
+// one username, each further try waits longer (30 s, 1 min, 2 min, ... 15 min).
+const failures = new Map(); // "ip:..." or "user:..." -> { count, until }
+function lockedFor(key) {
+  const f = failures.get(key);
+  return f && f.until > Date.now() ? Math.ceil((f.until - Date.now()) / 1000) : 0;
+}
+function failed(key) {
+  const f = failures.get(key) || { count: 0, until: 0 };
+  f.count++;
+  if (f.count >= 5) f.until = Date.now() + Math.min(15 * 60, 30 * 2 ** (f.count - 5)) * 1000;
+  failures.set(key, f);
+  if (failures.size > 10000) failures.delete(failures.keys().next().value);
+}
+// New accounts: at most 5 per address per hour.
+const signups = new Map(); // ip -> [times]
+function signupAllowed(ip) {
+  const now = Date.now();
+  const list = (signups.get(ip) || []).filter((t) => now - t < 3600_000);
+  signups.set(ip, list);
+  return list.length < 5;
+}
+// For tests.
+export function resetLimits() {
+  failures.clear();
+  signups.clear();
+}
+const SIGNUP_ON = process.env.KITE_SIGNUP !== "0";
+
 // Returns true if the request was a /__kite/ request (and has been answered).
-export async function handleKiteApi(req, res, { sessions, allowedOrigins = [] }) {
+export async function handleKiteApi(req, res, { sessions, allowedOrigins = [], clientIp = "unknown" }) {
   const { pathname } = new URL(req.url, "http://localhost");
   if (!pathname.startsWith(KITE_PREFIX)) return false;
   res.setHeader("x-kite-source", "kite");
@@ -129,15 +163,63 @@ export async function handleKiteApi(req, res, { sessions, allowedOrigins = [] })
 
   // The cookie manager: only for the Kite UI.
   if (pathname === "/__kite/cookies" || pathname === "/__kite/cookies/clear" || pathname === "/__kite/cookies/import" ||
-    pathname === "/__kite/ticket") {
+    pathname === "/__kite/ticket" || pathname === "/__kite/account" || pathname.startsWith("/__kite/account/")) {
     const origin = req.headers.origin;
     let fromUi = false;
     try {
       fromUi = allowedOrigins.length ? allowedOrigins.includes(origin) : new URL(origin).host !== req.headers.host;
     } catch {}
     const cors = fromUi ? { "access-control-allow-origin": origin, "access-control-allow-credentials": "true", vary: "Origin" } : {};
-    if (req.method === "OPTIONS") return send(res, fromUi ? 204 : 403, "", { ...cors, "access-control-allow-methods": "GET, POST" }), true;
+    if (req.method === "OPTIONS") {
+      return send(res, fromUi ? 204 : 403, "", { ...cors, "access-control-allow-methods": "GET, POST", "access-control-allow-headers": "content-type" }), true;
+    }
     if (!fromUi) return send(res, 403, "Only the Kite UI can manage cookies."), true;
+    const json = (status, value) => send(res, status, JSON.stringify(value), { ...cors, "content-type": "application/json" });
+    if (pathname === "/__kite/account" || pathname.startsWith("/__kite/account/")) {
+      if (pathname === "/__kite/account") {
+        sessions.jarFor(req, res); // every visitor has a (guest) session
+        return json(200, { user: sessions.userOf(req), signup: SIGNUP_ON }), true;
+      }
+      if (req.method !== "POST") return send(res, 405, "", cors), true;
+      let body = {};
+      try {
+        body = JSON.parse((await readBody(req, 4096)) || "{}");
+      } catch {}
+      const action = pathname.slice("/__kite/account/".length);
+      if (action === "signout") {
+        sessions.signOut(req, res);
+        return json(200, { user: null }), true;
+      }
+      if (action === "signout-everywhere") {
+        const user = sessions.userOf(req);
+        if (user) sessions.signOutEverywhere(user);
+        sessions.signOut(req, res);
+        return json(200, { user: null }), true;
+      }
+      const username = String(body.username || "").trim().toLowerCase();
+      if (action === "signup") {
+        if (!SIGNUP_ON) return json(403, { error: "Creating accounts is turned off on this Kite." }), true;
+        if (!signupAllowed(clientIp)) return json(429, { error: "Too many new accounts from your address. Try again later." }), true;
+        const error = await sessions.signUp(req, res, username, body.password);
+        if (error) return json(400, { error }), true;
+        signups.get(clientIp).push(Date.now());
+        console.log(`[info] new Kite account: ${username}`);
+        return json(200, { user: username }), true;
+      }
+      if (action === "signin") {
+        const wait = Math.max(lockedFor("ip:" + clientIp), lockedFor("user:" + username));
+        if (wait) return json(429, { error: `Too many wrong passwords. Try again in ${wait} seconds.` }), true;
+        if (await sessions.signIn(req, res, username, body.password)) {
+          failures.delete("ip:" + clientIp);
+          failures.delete("user:" + username);
+          return json(200, { user: username }), true;
+        }
+        failed("ip:" + clientIp);
+        failed("user:" + username);
+        return json(401, { error: "Wrong username or password." }), true;
+      }
+      return send(res, 404, "", cors), true;
+    }
     const jar = sessions.jarFor(req, res);
     if (pathname === "/__kite/ticket") {
       return send(res, 200, JSON.stringify({ ticket: sessions.issueTicket() }), { ...cors, "content-type": "application/json" }), true;
@@ -154,7 +236,7 @@ export async function handleKiteApi(req, res, { sessions, allowedOrigins = [] })
       const imported = jar.import(list.slice(0, 5000));
       sessions.changed();
       console.log(`[info] imported ${imported} of ${list.length} cookies`);
-      return send(res, 200, JSON.stringify({ imported, found: list.length, sites: jar.summary() }),
+      return send(res, 200, JSON.stringify({ imported, found: list.length, user: sessions.userOf(req), sites: jar.summary() }),
         { ...cors, "content-type": "application/json" }), true;
     }
     if (pathname === "/__kite/cookies/clear") {

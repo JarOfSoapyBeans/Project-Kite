@@ -112,7 +112,7 @@ export function createKiteServer(config = {}) {
     }
 
     // Kite's own endpoints check their callers themselves.
-    if (pathname.startsWith(KITE_PREFIX)) return handleKiteApi(req, res, { sessions, allowedOrigins });
+    if (pathname.startsWith(KITE_PREFIX)) return handleKiteApi(req, res, { sessions, allowedOrigins, clientIp: clientIp(req) });
 
     if (!originAllowed(req)) {
       log(

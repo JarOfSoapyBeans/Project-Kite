@@ -32,6 +32,10 @@ rem 1 = rewrite page scripts so they see their real address (Stage 5).
 rem 0 = don't (for testing whether a broken page is caused by it).
 set KITE_JS_REWRITE=1
 
+rem 1 = anyone using your Kite can create their own Kite account.
+rem 0 = only accounts that already exist can sign in.
+set KITE_SIGNUP=1
+
 rem ------------------------------------------------------------------
 
 rem Behind a Cloudflare Tunnel: take visitors' real IPs from Cloudflare.

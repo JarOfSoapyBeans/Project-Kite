@@ -294,6 +294,92 @@ document.getElementById("cookies").addEventListener("click", () => {
   cookiePanel.hidden = !cookiePanel.hidden;
   if (!cookiePanel.hidden) updateCookies();
 });
+// ---------- Kite accounts ----------
+// Signing in to Kite gives this browser your account's cookie jar (your site
+// logins), the same on every device. Guests each get their own separate jar.
+
+const accountPanel = document.getElementById("account-panel");
+const accountBtn = document.getElementById("account");
+const accountMsg = document.getElementById("account-message");
+let currentUser = null;
+
+async function accountApi(path, body) {
+  const r = await fetch(backend() + "/__kite/account" + path, {
+    method: body ? "POST" : "GET",
+    credentials: "include",
+    headers: body ? { "content-type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || `backend answered ${r.status}`);
+  return data;
+}
+
+function showAccount(user, signupOn = true) {
+  currentUser = user;
+  accountBtn.classList.toggle("signed-in", Boolean(user));
+  accountBtn.title = user ? `Signed in as ${user}` : "Kite account (guest)";
+  document.getElementById("account-guest").hidden = Boolean(user);
+  document.getElementById("account-user-view").hidden = !user;
+  document.getElementById("account-name").textContent = user || "";
+  document.getElementById("account-signup").hidden = !signupOn;
+}
+
+// Pages in open tabs were loaded with the old account's cookies.
+function reloadTabs() {
+  for (const tab of tabs) if (tab.url) navigate(tab.url, tab);
+  if (!cookiePanel.hidden) updateCookies();
+}
+
+async function accountAction(path, body) {
+  accountMsg.textContent = "...";
+  try {
+    const data = await accountApi(path, body);
+    accountMsg.textContent = "";
+    document.getElementById("account-pass").value = "";
+    showAccount(data.user);
+    try { localStorage.setItem("kite-account-seen", "1"); } catch {}
+    accountPanel.hidden = true;
+    reloadTabs();
+  } catch (err) {
+    accountMsg.textContent = err.message;
+  }
+}
+
+accountBtn.addEventListener("click", () => {
+  accountPanel.hidden = !accountPanel.hidden;
+  if (!accountPanel.hidden) document.getElementById(currentUser ? "account-signout" : "account-user").focus();
+});
+document.getElementById("account-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  accountAction("/signin", { username: document.getElementById("account-user").value, password: document.getElementById("account-pass").value });
+});
+document.getElementById("account-signup").addEventListener("click", () => {
+  const username = document.getElementById("account-user").value;
+  const password = document.getElementById("account-pass").value;
+  if (!username || !password) return (accountMsg.textContent = "Pick a username and a password (8+ characters), then click Create account.");
+  accountAction("/signup", { username, password });
+});
+document.getElementById("account-guest-go").addEventListener("click", () => {
+  try { localStorage.setItem("kite-account-seen", "1"); } catch {}
+  accountPanel.hidden = true;
+});
+document.getElementById("account-signout").addEventListener("click", () => accountAction("/signout", {}));
+document.getElementById("account-signout-all").addEventListener("click", () => {
+  if (confirm("Sign out of your Kite account on every device?")) accountAction("/signout-everywhere", {});
+});
+
+async function loadAccount() {
+  try {
+    const data = await accountApi("");
+    showAccount(data.user, data.signup);
+    let seen = false;
+    try { seen = localStorage.getItem("kite-account-seen") === "1"; } catch {}
+    if (!data.user && !seen) accountPanel.hidden = false; // first visit: sign in or continue as guest
+  } catch {}
+}
+loadAccount();
+
 // Import cookies exported from your normal browser (to be signed in inside Kite).
 const importBox = document.getElementById("cookie-import");
 const importText = document.getElementById("cookie-import-text");

@@ -18,10 +18,35 @@
         <button type="button" id="reload" title="Reload">&#8635;</button>
         <button type="button" id="popout" title="Open this page in its own browser window">&#10697;</button>
         <input id="address" type="text" spellcheck="false" placeholder="Search or enter address" />
+        <button type="button" id="account" title="Kite account">&#128100;</button>
         <button type="button" id="cookies" title="Cookies">&#127850;</button>
         <button type="button" id="settings" title="Backend settings">&#9881;</button>
       </form>
       <div id="status" hidden></div>
+      <div id="account-panel" hidden>
+        <div id="account-guest">
+          <div class="panel-head">
+            <strong>Welcome to Kite</strong>
+            <span class="muted">Sign in to keep your site logins on every device, or browse as a guest.</span>
+          </div>
+          <form id="account-form" autocomplete="on">
+            <input id="account-user" name="username" autocomplete="username" placeholder="Username" spellcheck="false" />
+            <input id="account-pass" name="password" type="password" autocomplete="current-password" placeholder="Password" />
+            <button type="submit" id="account-signin">Sign in</button>
+            <button type="button" id="account-signup">Create account</button>
+            <button type="button" id="account-guest-go">Continue as guest</button>
+          </form>
+          <div id="account-message" class="muted"></div>
+        </div>
+        <div id="account-user-view" hidden>
+          <div class="panel-head">
+            <span>Signed in as <strong id="account-name"></strong></span>
+            <span class="muted">Your site logins (cookies) follow you to any device you sign in to Kite from.</span>
+            <button type="button" id="account-signout">Sign out</button>
+            <button type="button" id="account-signout-all">Sign out everywhere</button>
+          </div>
+        </div>
+      </div>
       <div id="cookie-panel" hidden>
         <div class="panel-head">
           <strong>Cookies</strong>
