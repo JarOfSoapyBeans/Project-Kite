@@ -1,15 +1,43 @@
 // The bridge between Kite's interface (kite://app/index.html) and main.js.
 // Only these calls exist; the interface gets no other access to the computer.
 const { contextBridge, ipcRenderer } = require("electron");
+const call = (name) => (...args) => ipcRenderer.invoke(name, ...args);
 
 contextBridge.exposeInMainWorld("kiteDesktop", {
-  createView: (id) => ipcRenderer.invoke("view:create", id),
-  closeView: (id) => ipcRenderer.invoke("view:close", id),
-  showView: (id) => ipcRenderer.invoke("view:show", id),
-  navigate: (id, url) => ipcRenderer.invoke("view:navigate", id, url),
-  showNewTab: (id) => ipcRenderer.invoke("view:newtab", id),
-  command: (id, cmd) => ipcRenderer.invoke("view:command", id, cmd),
-  setInset: (px) => ipcRenderer.invoke("ui:inset", px),
-  focusUi: () => ipcRenderer.invoke("ui:focus"),
+  // tabs
+  createView: call("view:create"),
+  closeView: call("view:close"),
+  showView: call("view:show"),
+  navigate: call("view:navigate"),
+  showNewTab: call("view:newtab"),
+  command: call("view:command"), // back, forward, reload, stop, print
+  find: call("view:find"),
+  stopFind: call("view:stop-find"),
+  zoom: call("view:zoom"), // in, out, reset
+  savePdf: call("view:pdf"),
+  devtools: call("view:devtools"),
+  // the site in a tab
+  siteInfo: call("site:info"),
+  clearSite: call("site:clear"),
+  resetPermissions: call("site:reset-permissions"),
+  answerPermission: call("permission:answer"),
+  // downloads
+  listDownloads: call("downloads:list"),
+  downloadAction: call("downloads:action"),
+  // profiles and windows
+  listProfiles: call("profiles:list"),
+  addProfile: call("profiles:add"),
+  renameProfile: call("profiles:rename"),
+  removeProfile: call("profiles:remove"),
+  openProfile: call("profiles:open"),
+  newWindow: call("window:new"),
+  guestWindow: call("window:guest"),
+  startUrls: call("ui:start-urls"),
+  // menus (real system menus; resolve to what was picked)
+  tabMenu: call("menu:tab"),
+  appMenu: call("menu:app"),
+  // the interface itself
+  setInset: call("ui:inset"),
+  focusUi: call("ui:focus"),
   onEvent: (fn) => ipcRenderer.on("kite:event", (_e, event) => fn(event)),
 });

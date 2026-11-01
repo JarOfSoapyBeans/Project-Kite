@@ -7,17 +7,32 @@ let events = null;
 
 const platform = {
   kind: "desktop",
-  features: { accounts: false, cookies: false, popout: false, backendSettings: false },
+  features: {
+    // Kite Web only
+    accounts: false, cookies: false, popout: false, backendSettings: false,
+    // the app
+    siteInfo: true, permissions: true, find: true, zoom: true, print: true,
+    downloads: true, profiles: true, windows: true, appMenu: true, tabMenu: true,
+  },
 
   start(ev) {
     events = ev;
     bridge.onEvent((e) => {
-      if (e.type === "page") events.pageChanged(e.id, e.info || {});
-      else if (e.type === "open") events.openTab(e.url);
-      else if (e.type === "shortcut") events.shortcut(e.name);
-      else if (e.type === "navigate") events.navigateRequest(e.id, e.input);
+      switch (e.type) {
+        case "page": return events.pageChanged(e.id, e.info || {});
+        case "open": return events.openTab(e.url);
+        case "search": return events.search(e.text);
+        case "shortcut": return events.shortcut(e.name);
+        case "navigate": return events.navigateRequest(e.id, e.input);
+        case "find": return events.find(e.id, e.active, e.total);
+        case "zoom": return events.zoom(e.id, e.percent);
+        case "permission": return events.permission(e.request);
+        case "permission-done": return events.permissionDone(e.id);
+        case "downloads": return events.downloads(e.list || []);
+      }
     });
-    // Tabs go under the toolbar: tell the app how tall it is, now and whenever it changes.
+    // Tabs go under the toolbar: tell the app how tall it is, now and whenever
+    // it changes (bars and panels open under it).
     const chrome = document.getElementById("chrome");
     const report = () => bridge.setInset(Math.ceil(chrome.getBoundingClientRect().height));
     new ResizeObserver(report).observe(chrome);
@@ -31,9 +46,30 @@ const platform = {
   showNewTab: (id) => bridge.showNewTab(id),
   navigate: (id, url) => bridge.navigate(id, url),
   command: (id, cmd) => bridge.command(id, cmd),
-  // The page may have the keyboard; the address bar needs it.
+  // The page may have the keyboard; Kite's toolbar needs it.
   focusUi: () => bridge.focusUi(),
   popout() {},
+  startUrls: () => bridge.startUrls(),
+
+  find: (id, text, opts) => bridge.find(id, text, opts),
+  stopFind: (id) => bridge.stopFind(id),
+  zoom: (id, dir) => bridge.zoom(id, dir),
+  savePdf: (id) => bridge.savePdf(id),
+  siteInfo: (id) => bridge.siteInfo(id),
+  clearSite: (id) => bridge.clearSite(id),
+  resetPermissions: (id) => bridge.resetPermissions(id),
+  answerPermission: (reqId, allow, remember) => bridge.answerPermission(reqId, allow, remember),
+  listDownloads: () => bridge.listDownloads(),
+  downloadAction: (id, cmd) => bridge.downloadAction(id, cmd),
+  listProfiles: () => bridge.listProfiles(),
+  addProfile: (name) => bridge.addProfile(name),
+  renameProfile: (id, name) => bridge.renameProfile(id, name),
+  removeProfile: (id) => bridge.removeProfile(id),
+  openProfile: (id) => bridge.openProfile(id),
+  newWindow: () => bridge.newWindow(),
+  guestWindow: () => bridge.guestWindow(),
+  tabMenu: (opts) => bridge.tabMenu(opts),
+  appMenu: () => bridge.appMenu(),
 };
 
 export default platform;

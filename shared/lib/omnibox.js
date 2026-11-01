@@ -12,11 +12,18 @@ export const DEFAULT_ENGINE = "bing";
 export function toUrl(input, engine = DEFAULT_ENGINE) {
   const value = String(input || "").trim();
   if (!value) return null;
+  if (/^view-source:https?:\/\//i.test(value)) return value;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return value;
   if (/^localhost(:\d+)?(\/.*)?$/i.test(value)) return "http://" + value;
   if (!/\s/.test(value) && /^[^\s/]+\.[^\s/.]{2,}(\/.*)?$/.test(value)) return "https://" + value;
   const e = SEARCH_ENGINES[engine] || SEARCH_ENGINES[DEFAULT_ENGINE];
   return e.url + encodeURIComponent(value);
+}
+
+// A search for exactly this text (e.g. "Search for ..." on selected text).
+export function searchUrl(text, engine = DEFAULT_ENGINE) {
+  const e = SEARCH_ENGINES[engine] || SEARCH_ENGINES[DEFAULT_ENGINE];
+  return e.url + encodeURIComponent(String(text || "").trim());
 }
 
 // What the address bar shows for a page (nothing for the new tab page).

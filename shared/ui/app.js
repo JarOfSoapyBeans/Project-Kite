@@ -7,6 +7,7 @@
 
 import platform from "./platform/index.js";
 import { toUrl, displayUrl } from "./lib/omnibox.js";
+import { initFeatures } from "./features.js";
 
 const tabsEl = document.getElementById("tabs");
 const addressEl = document.getElementById("address");
@@ -50,6 +51,7 @@ function selectTab(tab) {
   platform.showView(tab.id);
   tabs.forEach(renderTab);
   updateAddress();
+  features.tabSelected(tab);
   if (!tab.url) focusAddress();
 }
 
@@ -70,6 +72,10 @@ function createTab(input) {
   tab.tabEl.append(tab.labelEl, close);
   tab.tabEl.addEventListener("click", () => selectTab(tab));
   tab.tabEl.addEventListener("auxclick", (e) => e.button === 1 && closeTab(tab)); // middle click
+  tab.tabEl.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    features.tabMenu(tab);
+  });
   tabsEl.appendChild(tab.tabEl);
 
   tabs.push(tab);
@@ -88,6 +94,7 @@ function closeTab(tab) {
   if (tab.url) closed.push(tab.url);
   if (closed.length > 25) closed.shift();
   tabs.splice(index, 1);
+  features.tabClosed(tab);
   platform.closeView(tab.id);
   tab.tabEl.remove();
   if (!tabs.length) createTab();
@@ -116,6 +123,18 @@ function reloadAll() {
   for (const tab of tabs) if (tab.url) navigate(tab.url, tab);
 }
 
+// Padlock, site info, permissions, find, zoom, downloads, profiles, menus.
+const features = initFeatures({
+  platform,
+  activeTab: () => activeTab,
+  tabs: () => tabs.slice(),
+  createTab,
+  closeTab,
+  reopen: () => closed.length && createTab(closed.pop()),
+  canReopen: () => closed.length > 0,
+  focusUi: () => platform.focusUi && platform.focusUi(),
+});
+
 // ---------- the platform tells us what happens in tabs ----------
 
 platform.start({
@@ -126,6 +145,7 @@ platform.start({
     if ("url" in info) tab.url = info.url || null;
     if ("title" in info) tab.title = info.title || "";
     if ("loading" in info) tab.loading = info.loading;
+    if ("security" in info) tab.security = info.security;
     if (!tab.title && tab.url && !tab.loading) {
       try {
         tab.title = new URL(tab.url).hostname;
@@ -134,6 +154,7 @@ platform.start({
     if (!tab.url && !tab.loading) tab.title = "New Tab";
     renderTab(tab);
     if (tab === activeTab) updateAddress();
+    features.pageChanged(tab);
   },
   // A page asked for a new tab (window.open, target=_blank, ctrl+click).
   openTab(url) {
@@ -142,7 +163,7 @@ platform.start({
   status: showStatus,
   // A key pressed inside a page (the app forwards browser shortcuts).
   shortcut(name) {
-    if (SHORTCUTS[name]) SHORTCUTS[name]();
+    runShortcut(name);
   },
   // The new tab page's search box, in the app.
   navigateRequest(id, input) {
@@ -151,6 +172,15 @@ platform.start({
   },
   // Something (e.g. signing in or out) means every open page should be loaded again.
   reloadAll,
+  find: (id, active, total) => features.find(id, active, total),
+  zoom: (id, percent) => {
+    const tab = tabById(id);
+    if (tab) features.zoom(tab, percent);
+  },
+  permission: (request) => features.permission(request),
+  permissionDone: (id) => features.permissionDone(id),
+  downloads: (list) => features.downloads(list),
+  search: (text) => features.search(text),
 });
 
 // ---------- toolbar ----------
@@ -197,15 +227,32 @@ function shortcutFor(e) {
   if (mod && key === "w") return "close-tab";
   if (mod && key === "l") return "focus-address";
   if ((mod && key === "r") || key === "f5") return "reload";
+  if (mod && e.shiftKey && key === "n") return "guest-window";
+  if (mod && key === "n") return "new-window";
+  if (mod && key === "f") return "find";
+  if (mod && key === "p") return "print";
+  if (mod && key === "j") return "downloads";
+  if (mod && (key === "=" || key === "+")) return "zoom-in";
+  if (mod && key === "-") return "zoom-out";
+  if (mod && key === "0") return "zoom-reset";
   if (e.altKey && key === "arrowleft") return "back";
   if (e.altKey && key === "arrowright") return "forward";
   return null;
 }
+// Tabs and navigation here; the rest (find, zoom, print, downloads, windows)
+// where the platform has it, otherwise the key does what it normally does.
+function canRun(name) {
+  return Boolean(SHORTCUTS[name]) || features.available(name);
+}
+function runShortcut(name) {
+  if (SHORTCUTS[name]) SHORTCUTS[name]();
+  else if (features.available(name)) features.actions[name]();
+}
 document.addEventListener("keydown", (e) => {
   const name = shortcutFor(e);
-  if (!name) return;
+  if (!name || !canRun(name)) return;
   e.preventDefault();
-  SHORTCUTS[name]();
+  runShortcut(name);
 });
 
 // The new tab page's search box.
@@ -214,4 +261,7 @@ window.browserNavigate = (input) => navigate(input);
 // For the platform's own extras (e.g. Kite Web's account panel).
 window.kite = { navigate, createTab, reloadAll, tabs: () => tabs.slice() };
 
-createTab();
+// The app can open a window with pages already (e.g. "Open link in new window").
+const startUrls = platform.startUrls ? await platform.startUrls() : [];
+if (startUrls.length) startUrls.forEach((u) => createTab(u));
+else createTab();

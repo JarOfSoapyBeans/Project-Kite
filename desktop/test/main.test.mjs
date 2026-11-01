@@ -40,6 +40,7 @@ test("starts: kite:// scheme, one window with Kite's interface, locked down", ()
   const wp = win.opts.webPreferences;
   assert.ok(wp.contextIsolation && wp.sandbox && !wp.nodeIntegration);
   assert.ok(S.handlers["default:kite"] && S.handlers["persist:main:kite"], "served to the interface and inside tabs");
+  assert.equal(win.opts.title, "Kite");
 });
 
 test("tells sites it's plain Chrome", () => {
@@ -83,6 +84,12 @@ test("unsafe addresses never load", async () => {
   const e = { prevented: false, preventDefault() { this.prevented = true; } };
   v1.webContents.emit("will-navigate", e, "file:///etc/passwd");
   assert.ok(e.prevented, "pages can't send a tab to file:");
+  const e2 = { prevented: false, preventDefault() { this.prevented = true; } };
+  v1.webContents.url = "https://evil.example/";
+  v1.webContents.emit("will-navigate", e2, "kite://app/newtab.html");
+  assert.ok(e2.prevented, "websites can't open Kite's own pages");
+  assert.equal(main.allowedUrl("view-source:https://a.test/"), true);
+  assert.equal(main.allowedUrl("view-source:file:///etc/passwd"), false);
 });
 
 test("only Kite's interface can drive tabs", async () => {
@@ -97,8 +104,8 @@ test("page changes reach the interface; the new tab page shows no address", () =
   v1.webContents.emit("did-navigate", {}, "https://www.youtube.com/watch?v=x");
   v1.webContents.emit("page-title-updated", {}, "A video - YouTube");
   v2.webContents.emit("did-navigate", {}, "kite://app/newtab.html");
-  const ev = events();
-  assert.deepEqual(ev.find((e) => e.info.url === "https://www.youtube.com/watch?v=x"), { type: "page", id: 1, info: { url: "https://www.youtube.com/watch?v=x" } });
+  const ev = events().filter((e) => e.type === "page");
+  assert.deepEqual(ev.find((e) => e.info.url === "https://www.youtube.com/watch?v=x"), { type: "page", id: 1, info: { url: "https://www.youtube.com/watch?v=x", security: "secure" } });
   assert.ok(ev.some((e) => e.id === 1 && e.info.title === "A video - YouTube"));
   assert.ok(ev.some((e) => e.id === 2 && e.info.url === null && e.info.title === "New Tab"));
 });
@@ -129,6 +136,8 @@ test("shortcuts pressed inside a page work", () => {
   assert.ok(!press({ key: "c", control: true }), "copy still goes to the page");
   const names = events().filter((e) => e.type === "shortcut").map((e) => e.name);
   assert.deepEqual(names, ["new-tab", "close-tab", "prev-tab", "back"]);
+  assert.ok(press({ key: "f", control: true }) && press({ key: "=", control: true }) && press({ key: "j", control: true }));
+  assert.deepEqual(events().filter((e) => e.type === "shortcut").map((e) => e.name).slice(-3), ["find", "zoom-in", "downloads"]);
   assert.ok(press({ key: "F12" }));
   assert.ok(wc.devtools, "F12 opens the page's DevTools");
 });
@@ -143,10 +152,31 @@ test("the new tab page's search box; other pages can't use it", () => {
   assert.deepEqual(nav, [{ type: "navigate", id: 2, input: "kites" }]);
 });
 
-test("sites get no camera, microphone or location until Kite asks (part 3)", () => {
+test("permissions: the window showing the site asks you; remembered when you say so", async () => {
+  const [v1] = S.views;
   const ses = S.sessions["persist:main"];
-  const ask = (p) => new Promise((r) => ses.request(null, p, r));
-  return Promise.all([ask("media"), ask("geolocation"), ask("notifications"), ask("fullscreen")]).then((r) => assert.deepEqual(r, [false, false, false, true]));
+  const ask = (perm, details) => new Promise((r) => ses.request(v1.webContents, perm, r, details));
+  assert.equal(await ask("fullscreen", {}), true);
+  assert.equal(await ask("usb", {}), false);
+  const pending = ask("media", { mediaTypes: ["video"], requestingUrl: "https://meet.example/room" });
+  await tick();
+  const q = events().filter((e) => e.type === "permission").at(-1);
+  assert.deepEqual(q.request.text, "use your camera");
+  assert.equal(q.request.origin, "https://meet.example");
+  assert.equal(q.request.tabId, 1);
+  await call("permission:answer", [q.request.id, true, true]);
+  assert.equal(await pending, true);
+  assert.ok(events().some((e) => e.type === "permission-done" && e.id === q.request.id));
+  assert.equal(await ask("media", { mediaTypes: ["video"], requestingUrl: "https://meet.example/" }), true, "remembered: not asked again");
+  v1.webContents.url = "https://meet.example/room";
+  assert.deepEqual((await call("site:info", [1])).permissions, { camera: "allow" });
+  await call("site:reset-permissions", [1]);
+  assert.deepEqual((await call("site:info", [1])).permissions, {});
+  // a question for a tab that navigates away is answered "no"
+  const left = ask("geolocation", { requestingUrl: "https://meet.example/" });
+  await tick();
+  v1.webContents.emit("did-navigate", {}, "https://other.example/");
+  assert.equal(await left, false);
 });
 
 test("back, reload, fullscreen video, closing a tab", async () => {
@@ -170,4 +200,122 @@ test("mailto: links go to your mail app", () => {
   wc.emit("will-navigate", e, "mailto:me@example.com");
   assert.ok(e.prevented);
   assert.deepEqual(S.external, ["mailto:me@example.com"]);
+});
+
+test("find in page, zoom, print, PDF", async () => {
+  await call("view:create", [5]);
+  const v = S.views.at(-1);
+  await call("view:find", [5, "kite", { forward: true }]);
+  await call("view:find", [5, "kite", { findNext: true, forward: false }]);
+  await call("view:stop-find", [5]);
+  assert.deepEqual(v.webContents.finds, [["kite", { forward: true, findNext: false, matchCase: false }], ["kite", { forward: false, findNext: true, matchCase: false }], ["<stop>", "clearSelection"]]);
+  v.webContents.emit("found-in-page", {}, { activeMatchOrdinal: 2, matches: 7, finalUpdate: true });
+  assert.ok(events().some((e) => e.type === "find" && e.id === 5 && e.active === 2 && e.total === 7));
+  await call("view:zoom", [5, "in"]);
+  await call("view:zoom", [5, "in"]);
+  assert.equal(v.webContents.getZoomFactor(), 1.25);
+  v.webContents.emit("zoom-changed", {}, "out");
+  assert.equal(v.webContents.getZoomFactor(), 1.1);
+  await call("view:zoom", [5, "reset"]);
+  assert.equal(events().filter((e) => e.type === "zoom").at(-1).percent, 100);
+  await call("view:command", [5, "print"]);
+  assert.ok(v.webContents.printed);
+  v.webContents.url = "https://a.test/";
+  v.webContents.getTitle = () => "My: page?";
+  assert.equal(await call("view:pdf", [5]), true);
+  assert.ok(fs.existsSync(path.join(S.paths.downloads, "My_ page_.pdf")));
+});
+
+test("pages that can't load show Kite's error page; the address bar keeps the address; reload retries", async () => {
+  const v = S.views.at(-1);
+  v.webContents.emit("did-fail-load", {}, -105, "ERR_NAME_NOT_RESOLVED", "https://nope.example/", true);
+  assert.match(v.webContents.url, /^kite:\/\/app\/error\.html\?u=https%3A%2F%2Fnope\.example%2F&c=-105/);
+  v.webContents.emit("did-navigate", {}, v.webContents.url);
+  const ev = events().filter((e) => e.type === "page" && e.id === 5).at(-1);
+  assert.deepEqual(ev.info, { url: "https://nope.example/", security: "error" });
+  await call("view:command", [5, "reload"]);
+  assert.equal(v.webContents.url, "https://nope.example/");
+  const before = v.webContents.loaded.length;
+  v.webContents.emit("did-fail-load", {}, -3, "ERR_ABORTED", "https://x.example/", true);
+  v.webContents.emit("did-fail-load", {}, -105, "x", "https://ad.example/", false);
+  assert.equal(v.webContents.loaded.length, before, "cancelled loads and frames don't show it");
+});
+
+test("right-click menu: real menu, actions on the page", () => {
+  const v = S.views.at(-1);
+  v.webContents.emit("context-menu", {}, { x: 3, y: 4, linkURL: "https://b.test/", pageURL: "https://a.test/" });
+  const pop = S.popups.at(-1);
+  assert.equal(pop.opts.window, win);
+  const item = (label) => pop.template.find((i) => i.label === label);
+  item("Open link in new tab").click();
+  assert.ok(events().some((e) => e.type === "open" && e.url === "https://b.test/"));
+  item("Copy link address").click();
+  assert.deepEqual(S.clipboard.at(-1), "https://b.test/");
+  item("Save link as\u2026").click();
+  assert.deepEqual(v.webContents.downloads, ["https://b.test/"]);
+  item("Inspect").click();
+  assert.deepEqual(v.webContents.inspected, [3, 4]);
+  const windowsBefore = S.windows.length;
+  item("Open link in new window").click();
+  assert.equal(S.windows.length, windowsBefore + 1, "a new window, same profile");
+});
+
+test("tab and app menus resolve to what was picked", async () => {
+  const pTab = call("menu:tab", [{ count: 3, canReopen: true }]);
+  S.popups.at(-1).template.find((i) => i.label === "Duplicate").click();
+  assert.equal(await pTab, "duplicate");
+  const pApp = call("menu:app", []);
+  S.popups.at(-1).template.find((i) => i.label === "Find\u2026").click();
+  assert.equal(await pApp, "find");
+  const pNone = call("menu:app", []);
+  S.popups.at(-1).opts.callback(); // closed without picking
+  assert.equal(await pNone, null);
+});
+
+test("windows, guest windows and profiles: separate sessions, events to the right window", async () => {
+  const count = S.windows.length;
+  const pGuest = call("menu:app", []);
+  S.popups.at(-1).template.find((i) => i.label === "New guest window").click();
+  assert.equal(await pGuest, null, "done by the app, nothing for the interface");
+  const guest = S.windows[count];
+  assert.equal(guest.opts.title, "Kite (Guest)");
+  const guestUi = guest.webContents;
+  guestUi.url = "kite://app/index.html";
+  const gcall = (name, args) => S.ipcHandle[name]({ sender: guestUi, senderFrame: guestUi.mainFrame }, ...args);
+  await gcall("view:create", [1]);
+  const gv = S.views.at(-1);
+  assert.match(gv.opts.webPreferences.partition, /^guest-[0-9a-f]+$/, "in memory, not persist:");
+  assert.equal((await gcall("profiles:list", [])).current.guest, true);
+  gv.webContents.emit("page-title-updated", {}, "Guest page");
+  assert.ok(guestUi.sent.some(([, e]) => e.info && e.info.title === "Guest page"));
+  assert.ok(!events().some((e) => e.info && e.info.title === "Guest page"), "not sent to the main window");
+  const gses = S.sessions[gv.opts.webPreferences.partition];
+  guest.close();
+  assert.deepEqual(gses.cleared, ["all"], "a guest leaves nothing behind");
+
+  const added = await call("profiles:add", ["Work"]);
+  const work = S.windows.at(-1);
+  assert.equal(work.opts.title, "Kite (Work)");
+  assert.deepEqual((await call("profiles:list", [])).list.map((p) => p.name), ["Main", "Work"]);
+  assert.equal(await call("profiles:remove", ["main"]), false);
+  assert.equal(await call("profiles:remove", [added.id]), true);
+  assert.ok(work.destroyed, "its windows close");
+  assert.deepEqual(S.sessions["persist:profile-" + added.id].cleared, ["all"], "its data is deleted");
+});
+
+test("downloads reach the profile's windows; actions only for that profile", async () => {
+  const ses = S.sessions["persist:main"];
+  const { EventEmitter } = await import("node:events");
+  const item = new EventEmitter();
+  Object.assign(item, { getFilename: () => "kite.zip", getURL: () => "https://f.test/kite.zip", getTotalBytes: () => 10, getReceivedBytes: () => 10,
+    isPaused: () => false, canResume: () => false, setSavePath(p) { this.savePath = p; }, cancel() {} });
+  ses.emit("will-download", {}, item);
+  assert.equal(item.savePath, path.join(S.paths.downloads, "kite.zip"));
+  item.emit("done", {}, "completed");
+  const list = events().filter((e) => e.type === "downloads").at(-1).list;
+  assert.equal(list[0].filename, "kite.zip");
+  assert.equal(list[0].state, "completed");
+  assert.deepEqual(await call("downloads:list", []), list);
+  assert.equal(await call("downloads:action", [list[0].id, "show"]), true);
+  assert.equal(S.external.at(-1), "show:" + path.join(S.paths.downloads, "kite.zip"));
 });

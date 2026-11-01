@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { toUrl } from "../lib/omnibox.js";
+import { toUrl, searchUrl } from "../lib/omnibox.js";
 
 test("addresses and searches", () => {
   assert.equal(toUrl("example.com"), "https://example.com");
@@ -10,4 +10,6 @@ test("addresses and searches", () => {
   assert.equal(toUrl("kites"), "https://www.bing.com/search?q=kites");
   assert.equal(toUrl("how to fly a kite", "google"), "https://www.google.com/search?q=how%20to%20fly%20a%20kite");
   assert.equal(toUrl("   "), null);
+  assert.equal(toUrl("view-source:https://a.test/"), "view-source:https://a.test/");
+  assert.equal(searchUrl("example.com"), "https://www.bing.com/search?q=example.com");
 });

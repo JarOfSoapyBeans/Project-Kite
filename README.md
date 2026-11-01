@@ -26,6 +26,7 @@ interface:
 ```
 shared/            the browser interface and logic, written once
   ui/              tabs, toolbar, address bar, new tab page (index.html, app.js, ...)
+                   features.js: padlock, permissions, find, zoom, downloads, profiles, menus
   lib/             shared logic (omnibox.js: address or search?)
   platform/        how tabs work where Kite runs:
     web.js           Kite Web: each tab is an iframe through the backend
@@ -33,7 +34,9 @@ shared/            the browser interface and logic, written once
     desktop.js       the Kite app: each tab is a real Chromium view
 frontend/          Kite Web: `npm run build` assembles shared/ into frontend/dist
 backend/           the proxy that powers Kite Web
-desktop/           the Kite app (Electron): main.js, preload.js, view-preload.js
+desktop/           the Kite app (Electron): main.js, preload.js, view-preload.js,
+  lib/               profiles, site permissions, downloads, menus
+  pages/             the app's own pages (error.html)
 ```
 
 From the repo folder: `npm test` runs the shared, backend and app tests, `npm run web`
@@ -49,9 +52,24 @@ npm run desktop
 ```
 
 Each tab is a real Chromium page: sites load directly, as in Chrome or Edge, with
-no backend and no rewriting. Your sites' logins and storage are kept in the app's
-own profile. Sites get no camera, microphone, location or notifications yet (Kite
-will ask you, in Stage 7 part 3). F12 opens DevTools for the current page.
+no backend and no rewriting. What the app has:
+
+- **Profiles**: each with its own logins, cookies, storage and site permissions
+  (👤). Windows belong to one profile. **Guest windows** (Ctrl+Shift+N) keep nothing.
+- **Site permissions**: when a site asks for your camera, microphone, location,
+  notifications..., a bar asks you (this time / every visit / never). The padlock
+  (🔒, or "Not secure" on http) shows the site's permissions and can clear its data.
+- **Downloads** (Ctrl+J) go to your Downloads folder, with pause, resume, open
+  and show in folder.
+- **Find in page** (Ctrl+F), **zoom** (Ctrl+=, Ctrl+-, Ctrl+0, Ctrl+wheel),
+  **print** (Ctrl+P) and **save as PDF**.
+- **Right-click menus** on pages (links, images, text, spelling) and tabs, and
+  the ⋮ menu. F12 opens DevTools for the page.
+- Kite's own **error page** when a site can't be reached, and no way past an
+  invalid security certificate.
+
+Where the app keeps things: `%APPDATA%\kite-desktop` on Windows (profiles.json,
+permissions-*.json and the profiles' browser data).
 
 ## Try it in GitHub Codespaces
 
