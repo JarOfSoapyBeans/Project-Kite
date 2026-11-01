@@ -1,0 +1,10 @@
+{
+  "name": "kite-shared",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "description": "Kite's browser interface and logic, shared by the Kite app (desktop) and Kite Web.",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}

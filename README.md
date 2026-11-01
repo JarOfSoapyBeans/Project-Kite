@@ -17,6 +17,28 @@ every site through its own proxy engine, written from scratch with no dependenci
 - `backend/` is a small Node server you host yourself (Codespaces, a VPS, a home
   server behind a Cloudflare Tunnel, Fly.io, Railway...).
 
+### Kite is becoming an app (Stage 7)
+
+Kite is mainly a **desktop browser app** (real Chromium, in progress), with
+**Kite Web**, the version above, that looks and works like it. Both use one
+interface:
+
+```
+shared/            the browser interface and logic, written once
+  ui/              tabs, toolbar, address bar, new tab page (index.html, app.js, ...)
+  lib/             shared logic (omnibox.js: address or search?)
+  platform/        how tabs work where Kite runs:
+    web.js           Kite Web: each tab is an iframe through the backend
+    web-panels.js    Kite Web only: accounts, cookie jar, backend address
+    desktop.js       the Kite app (Stage 7 part 2)
+frontend/          Kite Web: `npm run build` assembles shared/ into frontend/dist
+backend/           the proxy that powers Kite Web
+desktop/           the Kite app (Stage 7 part 2)
+```
+
+From the repo folder: `npm test` runs the shared and backend tests, `npm run web`
+builds and serves Kite Web on http://localhost:3000.
+
 ## Try it in GitHub Codespaces
 
 1. Open this repo in a Codespace (Code > Codespaces > Create codespace).
@@ -60,7 +82,8 @@ docker build -t kite-backend .
 docker run -p 8080:8080 -e ALLOWED_ORIGINS=https://YOUR-KITE.vercel.app kite-backend
 ```
 
-**Frontend on Vercel:** import the repo, set **Root Directory** to `frontend`, add
+**Frontend on Vercel:** import the repo, set **Root Directory** to `frontend`
+(keep "Include files outside the Root Directory" on: the build reads `shared/`), add
 the environment variable `BACKEND_URL=https://YOUR-BACKEND-HOST`, and deploy. Then put
 your Vercel URL in the backend's `ALLOWED_ORIGINS`.
 
