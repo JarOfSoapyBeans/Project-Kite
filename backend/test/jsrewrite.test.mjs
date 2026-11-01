@@ -26,7 +26,20 @@ test("leaves strings, comments, regexes, keys, labels and class members alone", 
     "o = { location: 1, top: 2, location() {}, get top() {} }",
     "top: for (;;) { break top; }",
     "class A { top = 1; location() {} static top() {} #location = 2; m() { this.#location } }",
-    "var t = { 'top': 1 }['top']",
+  ]) assert.equal(rw(src), src, src);
+});
+
+test("Stage 6: computed lookups and eval are wrapped", () => {
+  assert.equal(rw("window[k]; a?.[k]; f()[i]; s[i][j]"), "window[__kite$k(k)/*k*/]; a?.[__kite$k(k)/*k*/]; f()[__kite$k(i)/*k*/]; s[__kite$k(i)/*k*/][__kite$k(j)/*k*/]");
+  assert.equal(rw("a[0] + a['x'] + a.default[k]"), "a[0] + a['x'] + a.default[__kite$k(k)/*k*/]");
+  assert.equal(rw("a['top']"), "a[__kite$k('top')/*k*/]");
+  assert.equal(rw("({ a: 1 })[k]"), "({ a: 1 })[__kite$k(k)/*k*/]");
+  assert.equal(rw("a[b, c]"), "a[__kite$k((b, c))/*k*/]");
+  assert.equal(rw("eval(code); eval(a, b)"), "eval(__kite$rw(code)/*k*/); eval(__kite$rw(a)/*k*/, b)");
+  for (const src of [
+    "x = [1, 2]; [a, b] = c", "if (x) [1].map(f)", "let [q] = z", "o = { [k]: 1, get [m]() {} }",
+    "class A { [k]() {} static [s] = 1; eval(e) {} }", "x.eval(c)", "function eval(x) {}",
+    "let subnamespace\n[a, b] = c",
   ]) assert.equal(rw(src), src, src);
 });
 

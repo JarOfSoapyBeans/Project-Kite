@@ -1,4 +1,4 @@
-// Kite's JavaScript rewriter (Stage 5). No dependencies.
+// Kite's JavaScript rewriter (Stages 5 and 6). No dependencies.
 //
 // Pages can't be shown their real address any other way: browsers make
 // window.location, document.location and window.top impossible to replace. So
@@ -11,6 +11,12 @@
 // Object.prototype: for a window or document they return a stand-in that reports
 // the real address (https://www.youtube.com/...) and pretends the Kite tab is the
 // top window; for any other object they simply return obj.location / obj.top.
+//
+// Stage 6: names can also be looked up indirectly (window["loc" + "ation"]), so
+// computed lookups are wrapped as well, and so is the code given to eval():
+//
+//   obj[expr]       -> obj[__kite$k(expr)/*k*/]   ("location" -> "__kite$location")
+//   eval(code)      -> eval(__kite$rw(code)/*k*/) (code rewritten the same way)
 //
 // Only real identifiers are renamed: never text inside strings, comments, regular
 // expressions or template text, never object-literal keys or class member names.
@@ -34,6 +40,14 @@ export function kiteRenamer() {
     "case", "do", "else", "yield", "await", "extends",
   ]);
   const CONTROL_KEYWORDS = new Set(["if", "while", "for", "with"]);
+  // A "[" after one of these starts an array or a destructuring pattern, not a lookup.
+  const NOT_A_VALUE = new Set([...KEYWORDS_BEFORE_EXPRESSION, "else", "var", "let", "const", "export", "default", "import"]);
+  const MEMBER_PREAMBLE = new Set(["get", "set", "static", "async", "accessor"]); // { get [k]() {} }
+  const KEY_FN = PREFIX + "k"; // obj[expr]   -> obj[__kite$k(expr)]
+  const EVAL_FN = PREFIX + "rw"; // eval(code) -> eval(__kite$rw(code))
+  // The ")" Kite adds is marked, so the page can be shown its code as it was
+  // (fn.toString()) by simply removing what Kite added.
+  const CLOSE = ")/*k*/";
 
   // Punctuators, longest first so ">>>=" wins over ">".
   const PUNCTUATORS = [
@@ -56,7 +70,9 @@ export function kiteRenamer() {
   }
 
   // Returns [{ start, end, text }] edits for the given source.
-  function findRenames(src, names) {
+  // Stage 6: computed lookups and eval() are wrapped too (unless lookups: false).
+  function findRenames(src, names, lookups) {
+    const wrapLookups = lookups !== false;
     const wanted = new Set(names || RENAMED);
     const edits = [];
     const n = src.length;
@@ -65,6 +81,7 @@ export function kiteRenamer() {
     let lastParenControl = false; // the ")" just closed an if/while/for/with
     let pendingClass = -1; // stack depth where "class" was seen and its "{" is expected
     let declDepth = -1; // stack depth of the var/let/const list we're in, if any
+    let evalAt = -1; // position of the "(" of a direct eval call
     let i = 0;
 
     const isSpace = (c) => c === " " || c === "\t" || c === "\n" || c === "\r" || c === "\v" || c === "\f" ||
@@ -104,6 +121,48 @@ export function kiteRenamer() {
         else j++;
       }
       return { end: n, open: false };
+    }
+
+    // Is the "[" at i the start of a property lookup (a[b], f()[0], a?.[k])?
+    function isLookup() {
+      if (!prev) return false;
+      if (prev.type === "name") {
+        if (prev.property) return true; // a.default[k]: a property name, not a keyword
+        if (NOT_A_VALUE.has(prev.value) || prev.binding) return false; // "let x\n[a] = b" is two statements
+        const top = stack[stack.length - 1];
+        if (MEMBER_PREAMBLE.has(prev.value) && top && top.ch === "{" && top.kind !== "block") return false;
+        return true;
+      }
+      if (prev.type !== "punct") return true; // "str"[i], `t`[i], /x/[k], 1[k]
+      if (prev.value === ")") return !lastParenControl;
+      if (prev.value === "}") return prev.kind === "object"; // ({ a: 1, b: 2 })[k]
+      return prev.value === "]" || prev.value === "?.";
+    }
+    // a[0], a["name"]: plain keys that can't be "location" or "top" are left alone.
+    function plainKey(i) {
+      let j = skip(i + 1);
+      const c = src[j];
+      if (c >= "0" && c <= "9") {
+        NUMBER.lastIndex = j;
+        if (!NUMBER.exec(src)) return false;
+        j = NUMBER.lastIndex;
+      } else if (c === "'" || c === '"') {
+        let k = j + 1;
+        while (k < src.length && src[k] !== c && src[k] !== "\\" && src[k] !== "\n") k++;
+        if (src[k] !== c || RENAMED.includes(src.slice(j + 1, k))) return false;
+        j = k + 1;
+      } else return false;
+      return src[skip(j)] === "]";
+    }
+
+    // "eval" here names a method or function being defined, not a call.
+    function isMethodName() {
+      if (!prev) return false;
+      if (prev.type === "punct" && (prev.value === "." || prev.value === "?." || prev.value === "#")) return true;
+      if (prev.type === "name" && prev.value === "function") return true;
+      const top = stack[stack.length - 1];
+      return Boolean(top && top.ch === "{" && top.kind !== "block" &&
+        ["{", ",", ";", "}", "*", "get", "set", "static", "async"].includes(prev.value));
     }
 
     function decide(start, end, name) {
@@ -209,12 +268,18 @@ export function kiteRenamer() {
         while (j < n && isIdPart(src[j])) j++;
         const word = src.slice(i, j);
         if (wanted.has(word)) decide(i, j, word);
+        else if (word === "eval" && wrapLookups && src[skip(j)] === "(" && !isMethodName()) {
+          evalAt = skip(j); // direct eval: rewrite the code it runs, keep its scope
+        }
         if (word === "class" && !(prev && prev.type === "punct" && (prev.value === "." || prev.value === "?."))) {
           const nx = src[skip(j)];
           if (nx !== ":" && nx !== "(" && nx !== "," && nx !== "}") pendingClass = stack.length; // not { class: ... }
         }
         if (word === "var" || word === "let" || word === "const") declDepth = stack.length;
-        prev = { type: "name", value: word };
+        const binding = declDepth === stack.length && prev &&
+          (prev.value === "var" || prev.value === "let" || prev.value === "const" || prev.value === ",");
+        const property = Boolean(prev && prev.type === "punct" && (prev.value === "." || prev.value === "?."));
+        prev = { type: "name", value: word, binding, property };
         i = j;
         continue;
       }
@@ -223,11 +288,21 @@ export function kiteRenamer() {
       if (c === "(" || c === "[" || c === "{") {
         const entry = { ch: c };
         if (c === "(") entry.control = prev && prev.type === "name" && CONTROL_KEYWORDS.has(prev.value);
+        if (c === "(" && i === evalAt && src[skip(i + 1)] !== ")") {
+          entry.open = { start: i + 1, end: i + 1, text: EVAL_FN + "(" };
+          entry.evalCall = true;
+          edits.push(entry.open);
+        }
+        if (c === "[" && wrapLookups && isLookup() && !plainKey(i)) {
+          entry.open = { start: i + 1, end: i + 1, text: KEY_FN + "(" };
+          edits.push(entry.open);
+        }
         if (c === "{") {
           // What comes before "{" tells a block ("if (x) {", "=> {", "; {") from an
           // object literal or destructuring pattern ("= {", "({", ", {", "return {").
           const pv = prev && prev.value;
           if (pendingClass === stack.length) entry.kind = "class";
+          else if (!prev && stack.length && stack[stack.length - 1].ch === "${") entry.kind = "object"; // `${{ a: 1 }[k]}`
           else if (!prev || (prev.type === "punct" && [")", "{", "}", ";", "=>"].includes(pv)) ||
             (prev.type === "name" && ["else", "do", "try", "finally"].includes(pv))) entry.kind = "block";
           else entry.kind = "object";
@@ -249,9 +324,13 @@ export function kiteRenamer() {
           } else prev = { type: "tmpl" };
           continue;
         }
+        if (entry && entry.open && !entry.closed) {
+          edits.push({ start: i, end: i, text: CLOSE });
+          if (entry.comma) entry.open.text += "(", edits[edits.length - 1].text = ")" + CLOSE;
+        }
         lastParenControl = c === ")" && Boolean(entry && entry.control);
         if (declDepth > stack.length) declDepth = -1;
-        prev = { type: "punct", value: c };
+        prev = { type: "punct", value: c, kind: entry && entry.kind };
         i++;
         continue;
       }
@@ -262,6 +341,15 @@ export function kiteRenamer() {
         if (src.startsWith(op, i)) {
           p = op === "?." && src[i + 2] >= "0" && src[i + 2] <= "9" ? "?" : op;
           break;
+        }
+      }
+      if (p === ",") {
+        const top = stack[stack.length - 1];
+        if (top && top.open && !top.closed) {
+          if (top.evalCall) {
+            edits.push({ start: i, end: i, text: CLOSE }); // eval(code, more): only code is rewritten
+            top.closed = true;
+          } else top.comma = true; // a[b, c]: keep it one expression
         }
       }
       if (p === ";" && pendingClass > stack.length) pendingClass = -1;
@@ -300,7 +388,7 @@ function parses(code, asFunctionBody) {
 // Rewrite a script. asFunctionBody: an event-handler attribute (onclick="...").
 // Returns the original if nothing needs renaming or the result doesn't parse.
 export function rewriteJsUncached(src, { asFunctionBody = false } = {}) {
-  if (!RENAMED.some((name) => src.includes(name))) return src;
+  if (!src.includes("[") && !src.includes("eval") && !RENAMED.some((name) => src.includes(name))) return src;
   const edits = findRenames(src);
   if (!edits.length) return src;
   const out = applyEdits(src, edits);

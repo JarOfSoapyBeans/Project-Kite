@@ -328,7 +328,108 @@ export function rewriteHtml(html, pageUrl, { allowedOrigins = [], scriptCookies 
 // back/forward/reload buttons control the tab.
 function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
   if (window.__kite) return;
-  window.__kite = true;
+  Object.defineProperty(window, "__kite", { value: true }); // not enumerable: pages don't see it
+
+  // ---------- looking native ----------
+  // Pages can tell a browser function from a replacement by its source text
+  // (fetch.toString() is "function fetch() { [native code] }" for the real one)
+  // and its name and length. Anti-bot checks such as YouTube's BotGuard do. So
+  // every function Kite replaces reports the original's text, name and length.
+  // The browser functions in the places Kite changes are noted first, and
+  // compared with what is there at the end (see "disguise" at the bottom).
+  var origToString = Function.prototype.toString;
+  var natives = new WeakMap(); // Kite function -> the browser function it stands in for
+  var kiteSource = "";
+  try { kiteSource = origToString.call(kiteClient) + (makeRenamer ? origToString.call(makeRenamer) : ""); } catch (e) {}
+  var ownCode = new WeakMap(); // function -> is it one of Kite's (cache)
+  function isKiteFunction(f) {
+    var known = ownCode.get(f);
+    if (known !== undefined) return known;
+    var text = "";
+    try { text = origToString.call(f); } catch (e) {}
+    known = text.length > 20 && text.indexOf("[native code]") < 0 && kiteSource.indexOf(text) >= 0;
+    ownCode.set(f, known);
+    return known;
+  }
+  function nativeAs(fake, orig) {
+    if (typeof fake !== "function" || typeof orig !== "function" || fake === orig) return fake;
+    natives.set(fake, orig);
+    try { Object.defineProperty(fake, "name", { value: orig.name, configurable: true }); } catch (e) {}
+    try { Object.defineProperty(fake, "length", { value: orig.length, configurable: true }); } catch (e) {}
+    return fake;
+  }
+  // The page's own code, as Kite rewrote it, shown as it was: __kite$location ->
+  // location, obj[__kite$k(key)] -> obj[key], eval(__kite$rw(code)) -> eval(code).
+  var unrewritten = new Map();
+  function unrewrite(text) {
+    if (text.indexOf("__kite$") < 0) return text;
+    var hit = unrewritten.get(text);
+    if (hit !== undefined) return hit;
+    var out = text
+      .split("__kite$k(").join("")
+      .split("__kite$rw(").join("")
+      .split(")/*k*/").join("")
+      .replace(/\b(location|top): __kite\$\1\b/g, "$1") // { location } shorthand
+      .split("__kite$location").join("location")
+      .split("__kite$top").join("top");
+    if (unrewritten.size > 500) unrewritten.clear();
+    unrewritten.set(text, out);
+    return out;
+  }
+  function kiteToString() {
+    if (natives.has(this)) return origToString.call(natives.get(this));
+    if (typeof this === "function" && isKiteFunction(this)) {
+      var name = String(this.name || "").replace(/^bound /, "");
+      return "function " + (/^[A-Za-z_$][\w$]*$/.test(name) ? name : "") + "() { [native code] }";
+    }
+    return unrewrite(origToString.call(this));
+  }
+  nativeAs(kiteToString, origToString);
+  function patchToString(win) {
+    try {
+      var fp = win.Function.prototype;
+      if (fp.toString === kiteToString) return;
+      natives.set(kiteToString, fp.toString === origToString ? origToString : fp.toString);
+      Object.defineProperty(fp, "toString", { value: kiteToString, writable: true, configurable: true, enumerable: false });
+    } catch (e) {}
+  }
+  patchToString(window);
+  // Where Kite replaces browser functions; noted now, compared at the end.
+  var watched = [];
+  (function () {
+    var holders = [window, document, navigator, history, Reflect, Function.prototype, Object.prototype];
+    var names = Object.getOwnPropertyNames(window);
+    var wanted = /^(?:HTML\w*Element|SVG\w*Element|Document|Node|Element|History|XMLHttpRequest|Navigator|Navigation|ServiceWorkerContainer|Window|EventSource|Worker|SharedWorker|WebSocket|CharacterData|Text)$/;
+    for (var i = 0; i < names.length; i++) {
+      if (!wanted.test(names[i])) continue;
+      try {
+        var C = window[names[i]];
+        if (typeof C === "function" && C.prototype) holders.push(C.prototype);
+      } catch (e) {}
+    }
+    for (var h = 0; h < holders.length; h++) {
+      var keys = Object.getOwnPropertyNames(holders[h]);
+      var before = {};
+      for (var k = 0; k < keys.length; k++) {
+        try { before[keys[k]] = Object.getOwnPropertyDescriptor(holders[h], keys[k]); } catch (e) {}
+      }
+      watched.push({ holder: holders[h], before: before });
+    }
+  })();
+  function disguise() {
+    for (var h = 0; h < watched.length; h++) {
+      var w = watched[h];
+      for (var key in w.before) {
+        var a = w.before[key];
+        var b;
+        try { b = Object.getOwnPropertyDescriptor(w.holder, key); } catch (e) { continue; }
+        if (!a || !b) continue;
+        nativeAs(b.value, a.value);
+        nativeAs(b.get, a.get);
+        nativeAs(b.set, a.set);
+      }
+    }
+  }
   var PREFIX = "/proxy/";
   var current = realUrl;
   var realParent = window.parent;
@@ -502,6 +603,8 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
   // use). For a window or document they give the stand-in location and pretend
   // the Kite tab is the top window; for anything else they are plain .location
   // and .top. Installed into same-origin child frames too (e.g. about:blank).
+  function kiteKey(k) { return k === "location" || k === "top" ? "__kite$" + k : k; }
+  function kiteRewrite(code) { return typeof code === "string" ? rewriteCode(code) : code; }
   function installAccessors(win) {
     var OP = win.Object.prototype;
     if (Object.prototype.hasOwnProperty.call(OP, "__kite$location")) return;
@@ -550,6 +653,15 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
         this.location = v;
       },
     });
+    // Stage 6: obj[key] -> obj[__kite$k(key)], eval(code) -> eval(__kite$rw(code)).
+    win.Object.defineProperty(OP, "__kite$k", { configurable: true, writable: true, value: kiteKey });
+    win.Object.defineProperty(OP, "__kite$rw", { configurable: true, writable: true, value: kiteRewrite });
+    // Also on the window itself: found there, the lookup is as fast as no wrapper.
+    try {
+      win.Object.defineProperty(win, "__kite$k", { configurable: true, writable: true, value: kiteKey });
+      win.Object.defineProperty(win, "__kite$rw", { configurable: true, writable: true, value: kiteRewrite });
+    } catch (e) {}
+    if (win !== window) patchToString(win);
     win.Object.defineProperty(OP, "__kite$top", {
       configurable: true,
       get: function () {
@@ -654,7 +766,7 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
   // Code that pages build while running gets the same rewriting as their scripts.
   var renamer = makeRenamer ? makeRenamer() : null;
   function rewriteCode(code) {
-    if (!renamer || typeof code !== "string" || !/location|top/.test(code)) return code;
+    if (!renamer || typeof code !== "string" || !/location|top|\[|eval/.test(code)) return code;
     try { return renamer.applyEdits(code, renamer.findRenames(code)); } catch (e) { return code; }
   }
   var OrigFunction = Function;
@@ -979,7 +1091,7 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
       Object.defineProperty(proto, "__kitePatched", { value: true });
       ["pushState", "replaceState"].forEach(function (name) {
         var original = proto[name];
-        proto[name] = function (state, title, url) {
+        proto[name] = nativeAs(function (state, title, url) {
           if (this !== mainHistory) return original.apply(this, arguments);
           if (url !== undefined && url !== null && url !== "") {
             var real = null;
@@ -992,7 +1104,7 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
           var result = original.call(this, state, title, url);
           report();
           return result;
-        };
+        }, original);
       });
     } catch (e) {}
   }
@@ -1123,6 +1235,16 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
     kiteLog("error", "unhandled promise rejection: " + (r && r.stack ? String(r.stack).split("\n").slice(0, 6).join("\n") : String(r)));
   });
 
+  // Reflect.get(window, "location") is the same lookup as window["location"].
+  ["get", "set"].forEach(function (name) {
+    var orig = Reflect[name];
+    Reflect[name] = function (target, key) {
+      var args = Array.prototype.slice.call(arguments);
+      if (args.length > 1) args[1] = kiteKey(key);
+      return orig.apply(Reflect, args);
+    };
+  });
+
   // ---------- Kite UI ----------
 
   if (isTab) {
@@ -1138,6 +1260,8 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
     else if (d.cmd === "forward") history.forward();
     else if (d.cmd === "reload") location.reload();
   });
+
+  disguise(); // last: every replaced browser function now reports the original's text
 }
 
 // Runs at the start of every Web Worker a proxied page starts (Stage 5). Workers
@@ -1146,7 +1270,23 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
 // work and report the real address.
 function kiteWorkerClient() {
   if (self.__kite) return;
-  self.__kite = true;
+  Object.defineProperty(self, "__kite", { value: true });
+  var origToString = Function.prototype.toString;
+  var natives = new WeakMap();
+  function nativeAs(fake, orig) {
+    natives.set(fake, orig);
+    try { Object.defineProperty(fake, "name", { value: orig.name, configurable: true }); } catch (e) {}
+    try { Object.defineProperty(fake, "length", { value: orig.length, configurable: true }); } catch (e) {}
+    return fake;
+  }
+  var kiteToString = function toString() { return origToString.call(natives.has(this) ? natives.get(this) : this); };
+  nativeAs(kiteToString, origToString);
+  Object.defineProperty(Function.prototype, "toString", { value: kiteToString, writable: true, configurable: true });
+  Object.defineProperty(Object.prototype, "__kite$k", { configurable: true, writable: true,
+    value: function (k) { return k === "location" || k === "top" ? "__kite$" + k : k; } });
+  Object.defineProperty(Object.prototype, "__kite$rw", { configurable: true, writable: true, value: function (c) { return c; } });
+  Object.defineProperty(self, "__kite$k", { configurable: true, writable: true, value: Object.prototype.__kite$k });
+  Object.defineProperty(self, "__kite$rw", { configurable: true, writable: true, value: Object.prototype.__kite$rw });
   var PREFIX = "/proxy/";
   var realLocation = self.location;
   function encode(url) {
@@ -1193,6 +1333,7 @@ function kiteWorkerClient() {
       } catch (e) {}
       return origFetch.call(self, input, init);
     };
+    nativeAs(self.fetch, origFetch);
   }
   if (self.XMLHttpRequest) {
     var origOpen = XMLHttpRequest.prototype.open;
@@ -1201,12 +1342,14 @@ function kiteWorkerClient() {
       if (args.length > 1) args[1] = wrap(url);
       return origOpen.apply(this, args);
     };
+    nativeAs(XMLHttpRequest.prototype.open, origOpen);
   }
   if (self.importScripts) {
     var origImport = self.importScripts;
     self.importScripts = function () {
       return origImport.apply(self, Array.prototype.map.call(arguments, wrap));
     };
+    nativeAs(self.importScripts, origImport);
   }
   if (self.WebSocket) {
     var OrigWS = self.WebSocket;
@@ -1226,7 +1369,7 @@ function kiteWorkerClient() {
     };
     KiteWS.prototype = OrigWS.prototype;
     ["CONNECTING", "OPEN", "CLOSING", "CLOSED"].forEach(function (k) { KiteWS[k] = OrigWS[k]; });
-    self.WebSocket = KiteWS;
+    self.WebSocket = nativeAs(KiteWS, OrigWS);
   }
   var fake = {};
   ["href", "origin", "protocol", "host", "hostname", "port", "pathname", "search", "hash"].forEach(function (k) {
@@ -1244,6 +1387,13 @@ function kiteWorkerClient() {
     set: function (v) { this.top = v; },
   });
 }
+
+// Worklets (audio, paint) get just what rewritten code needs to run.
+const WORKLET_PRELUDE =
+  'Object.defineProperty(Object.prototype,"__kite$k",{configurable:true,writable:true,value:function(k){return k==="location"||k==="top"?"__kite$"+k:k}});' +
+  'Object.defineProperty(Object.prototype,"__kite$rw",{configurable:true,writable:true,value:function(c){return c}});' +
+  'Object.defineProperty(Object.prototype,"__kite$location",{configurable:true,get:function(){return this.location},set:function(v){this.location=v}});' +
+  'Object.defineProperty(Object.prototype,"__kite$top",{configurable:true,get:function(){return this.top},set:function(v){this.top=v}});\n';
 
 // ---------- fetching ----------
 
@@ -1501,6 +1651,7 @@ export async function handleProxy(req, res, options = {}) {
       out = rewriteJs(text);
       // Workers don't get the page's injected script, so they get their own.
       if (dest === "worker" || dest === "sharedworker") out = `(${kiteWorkerClient.toString()})();\n` + out;
+      else if (/worklet$/.test(dest)) out = WORKLET_PRELUDE + out;
     } else {
       out = rewriteCss(text, target);
     }
