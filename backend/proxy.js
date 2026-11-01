@@ -1589,6 +1589,39 @@ function sendError(res, status, message) {
 
 // options: allowPrivate (tests only), allowedPorts (array, or null for any), allowedOrigins,
 //          jar (a CookieJar for this session, Stage 4), onCookies (called when it changes)
+// KITE_MEDIA_LOG=1: one line per video chunk (YouTube's googlevideo.com), to
+// see when and why playback stops. For example:
+//   [video] 200   1.9 MB  2.3s  itag=399 range=0-1999999 rn=12  pot=yes  (finished)
+//   [video] 403   0.0 MB  0.1s  itag=399 rn=31  pot=no
+// pot=no means YouTube's anti-bot check (BotGuard) gave the player no token;
+// YouTube then stops serving the video after about a minute (403).
+const MEDIA_LOG = typeof process !== "undefined" && process.env.KITE_MEDIA_LOG === "1";
+export function logMedia(req, res, up, target, status) {
+  let u;
+  try {
+    u = new URL(target);
+  } catch {
+    return;
+  }
+  if (!/googlevideo\.com$/.test(u.hostname) || !u.pathname.includes("videoplayback")) return;
+  const started = Date.now();
+  let bytes = 0;
+  up.on("data", (c) => (bytes += c.length));
+  res.on("close", () => {
+    const q = u.searchParams;
+    const bits = [
+      q.get("itag") && `itag=${q.get("itag")}`,
+      (q.get("range") || req.headers.range) && `range=${q.get("range") || req.headers.range}`,
+      q.get("rn") && `rn=${q.get("rn")}`,
+      q.get("sabr") && "sabr",
+      q.has("pot") ? "pot=yes" : q.get("sabr") ? "pot=(inside the request)" : "pot=no",
+      req.method !== "GET" && req.method,
+      res.writableFinished ? "(finished)" : "(cut off: the page stopped it)",
+    ].filter(Boolean);
+    console.log(`[video] ${status}  ${(bytes / 1e6).toFixed(1).padStart(5)} MB  ${((Date.now() - started) / 1000).toFixed(1)}s  ${bits.join(" ")}`);
+  });
+}
+
 export async function handleProxy(req, res, options = {}) {
   const o = { allowPrivate: false, allowedPorts: [80, 443, 8080, 8443], allowedOrigins: [], ...options };
   let target;
@@ -1680,6 +1713,7 @@ export async function handleProxy(req, res, options = {}) {
       res.writeHead(status, headers);
       up.on("error", () => res.destroy());
       res.on("close", () => up.destroy());
+      if (MEDIA_LOG) logMedia(req, res, up, target, status);
       return up.pipe(res);
     }
 
