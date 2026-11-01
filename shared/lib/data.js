@@ -6,7 +6,8 @@
 export const MAX_HISTORY = 5000;
 
 export const DEFAULT_SETTINGS = {
-  searchEngine: "bing", // see SEARCH_ENGINES in omnibox.js
+  searchEngine: "kite", // see SEARCH_ENGINES in omnibox.js
+  searchEngineChosen: false, // you picked one in Settings (before Kite Search, Bing was the default)
   homePage: "", // "" = the new tab page, or an address
   showHomeButton: false,
   showBookmarksBar: true,
@@ -17,6 +18,9 @@ export const DEFAULT_SETTINGS = {
 export function withDefaults(settings) {
   const s = { ...DEFAULT_SETTINGS };
   for (const [k, v] of Object.entries(settings || {})) if (k in DEFAULT_SETTINGS && typeof v === typeof DEFAULT_SETTINGS[k]) s[k] = v;
+  // Bing was the default before Kite had its own search: move to Kite Search
+  // unless you chose an engine yourself.
+  if (!s.searchEngineChosen && s.searchEngine === "bing") s.searchEngine = "kite";
   return s;
 }
 

@@ -218,6 +218,14 @@ const platform = {
 
   // The padlock: Kite Web shows the site's address and connection; site
   // permissions (camera...) are your browser's own, for Kite's address.
+  // Kite Search (kite://search): the backend's own index.
+  async search(q, page = 1) {
+    const r = await fetch(backend() + "/__kite/search?q=" + encodeURIComponent(q) + "&page=" + page, { signal: AbortSignal.timeout(15000) });
+    const answer = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(answer.error || `the backend answered ${r.status}`);
+    return answer;
+  },
+
   // Kite DevTools: what the Kite backend is doing (only for Kite accounts named
   // in its KITE_DEVTOOLS_USERS: it shows everyone's browsing through it).
   devtools: {
@@ -226,6 +234,8 @@ const platform = {
     status: () => devtoolsApi("/status"),
     clear: () => devtoolsApi("/clear", {}),
     settings: (changes) => devtoolsApi("/settings", changes || {}),
+    // Kite Search's crawler: status, or { action: pause|resume|add, url }.
+    search: (body) => devtoolsApi("/search", body || undefined),
   },
 
   async siteInfo(id) {

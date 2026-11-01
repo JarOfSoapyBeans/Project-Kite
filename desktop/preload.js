@@ -41,6 +41,8 @@ contextBridge.exposeInMainWorld("kiteDesktop", {
   syncLink: call("sync:link"),
   syncUnlink: call("sync:unlink"),
   syncNow: call("sync:now"),
+  // Kite Search (kite://search)
+  searchQuery: call("search:query"),
   // Kite DevTools (kite://devtools)
   devtoolsEvents: call("devtools:events"),
   devtoolsStatus: call("devtools:status"),

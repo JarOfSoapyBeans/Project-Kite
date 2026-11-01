@@ -5,11 +5,13 @@
 //   bookmarks    kite://bookmarks  Ctrl+Shift+O
 //   settings     kite://settings
 //   devtools     kite://devtools   Ctrl+Shift+K (devtools-page.js)
+//   search       kite://search?q=  Kite Search results (search-page.js)
 // Everything shown from your data is set as text, never as HTML.
 
 import * as D from "./lib/data.js";
 import { SEARCH_ENGINES } from "./lib/omnibox.js";
 import { renderDevtools } from "./devtools-page.js";
+import { renderSearch } from "./search-page.js";
 
 export const PAGES = {
   newtab: "New Tab",
@@ -17,11 +19,12 @@ export const PAGES = {
   bookmarks: "Bookmarks",
   settings: "Settings",
   devtools: "Kite DevTools",
+  search: "Kite Search",
 };
 
-// "kite://history" -> "history"; anything else -> null.
+// "kite://history" -> "history", "kite://search?q=x" -> "search"; anything else -> null.
 export function pageOf(url) {
-  const m = /^kite:\/\/([a-z]+)\/?$/i.exec(String(url || "").trim());
+  const m = /^kite:\/\/([a-z]+)\/?(?:\?.*)?$/i.exec(String(url || "").trim());
   return m && PAGES[m[1].toLowerCase()] ? m[1].toLowerCase() : null;
 }
 
@@ -237,7 +240,7 @@ function settings(root, ctx) {
 
   const engine = el("select", {});
   for (const [id, e] of Object.entries(SEARCH_ENGINES)) engine.append(el("option", { value: id, textContent: e.name, selected: s().searchEngine === id }));
-  engine.addEventListener("change", () => change("searchEngine", engine.value));
+  engine.addEventListener("change", () => store.set("settings", { ...s(), searchEngine: engine.value, searchEngineChosen: true }));
 
   const startup = el("select", {});
   for (const [v, label] of [["newtab", "Open the new tab page"], ["continue", "Continue where you left off"], ["home", "Open the home page"]]) {
@@ -314,13 +317,14 @@ async function drawSync(box, sync) {
   box.append(form, msg);
 }
 
-const RENDER = { newtab: newTab, history, bookmarks, settings, devtools: renderDevtools };
+const RENDER = { newtab: newTab, history, bookmarks, settings, devtools: renderDevtools, search: renderSearch };
 
 // Draw page `name` into `root`. ctx: { store, open(url, { newTab }), navigate(input),
-// action(name), favicons, hasProfiles, platformName }. Returns { refresh(name), focus() }.
-export function renderPage(name, root, ctx) {
+// action(name), favicons, hasProfiles, platformName, search, devtools }; url: the
+// page's full address (kite://search?q=...). Returns { refresh(name), focus() }.
+export function renderPage(name, root, ctx, url = "kite://" + name) {
   root.textContent = "";
   root.dataset.page = name;
   root.__kiteView = {}; // pages that keep working (Kite DevTools) stop when replaced
-  return RENDER[name](root, ctx);
+  return RENDER[name](root, ctx, url);
 }

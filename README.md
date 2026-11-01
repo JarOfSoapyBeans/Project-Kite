@@ -76,7 +76,11 @@ no backend and no rewriting. What the app has:
 - **History** (`kite://history`, Ctrl+H): by day, searchable, remove or clear.
 - **Bookmarks**: the ☆ in the address bar or Ctrl+D, the bookmarks bar
   (Ctrl+Shift+B), and `kite://bookmarks` (Ctrl+Shift+O) to edit and reorder.
-- **Settings** (`kite://settings`): search engine (Bing, Google, DuckDuckGo),
+- **Kite Search** (`kite://search`): Kite's own search engine, the default
+  (see [Kite Search](#kite-search) below).
+- **Kite DevTools** (`kite://devtools`, Ctrl+Shift+K): what Kite is doing behind
+  the scenes (see [Kite DevTools](#kite-devtools)).
+- **Settings** (`kite://settings`): search engine (Kite, Bing, Google, DuckDuckGo),
   home page and button, what opens at startup (including last time's tabs),
   bookmarks bar, keeping history.
 
@@ -231,7 +235,10 @@ To update later: `git pull`, then restart `start_home.bat`. Your cookies stay in
   - [x] Part 3: profiles, permissions, downloads, find, zoom, print, menus
   - [x] Part 4: history, bookmarks, new tab page, settings (app and Kite Web)
   - [x] Part 5: data in your Kite account; app sync; find/zoom/print in Kite Web
-  - [ ] Part 6: Windows installer, auto-update, GitHub Actions, release
+  - [ ] Part 6: the first full release
+    - [x] 6a: Kite DevTools (`kite://devtools`)
+    - [x] 6b: Kite Search, Kite's own search engine (`backend/search/`)
+    - [ ] 6c: Windows installer, auto-update, GitHub Actions, release
 
 ### Known limits of Kite Web
 
@@ -267,6 +274,48 @@ Chromium's developer tools for the page itself. In Kite Web, because the
 backend's log includes everyone who browses through it, only Kite accounts
 named in `KITE_DEVTOOLS_USERS` (in `kite-secrets.bat`) can open it. The backend serves it at
 `/__kite/devtools/{check,events,status,settings,clear}`.
+
+## Kite Search
+
+Kite has its own search engine instead of Bing. It's the default (you can still
+pick Bing, Google or DuckDuckGo in Settings). Type a search in the address bar
+(or `?` then anything, to always search), and Kite shows `kite://search?q=...`:
+results with the matching words in bold, pages of 10, and links to run the
+same search on Bing, DuckDuckGo or Google, which helps while Kite's index is young.
+Back from a result returns to the results.
+
+It runs on your Kite backend (`backend/search/`, no dependencies):
+
+- **KiteBot, the crawler** (`crawler.js`) starts from a few seed sites, reads
+  pages and follows their links. It obeys `robots.txt` (including Crawl-delay)
+  and pages' `noindex`/`nofollow`, reads one page per site at a time, at least
+  1.5 s apart, a few sites at once, up to 1000 pages per site, only public
+  addresses, only web pages (up to 2 MB), with no cookies. It reads pages again
+  after a week and drops pages that are gone.
+- **The index** (`index.js`) keeps each page's strongest words, its title,
+  description and the start of its text (for snippets), and is saved to
+  `.kite-search.ndjson` next to `start_home.bat` (git-ignored), together with
+  KiteBot's queue, so a restart carries on.
+- **Ranking**: BM25 (rare words count more, repeats count less, long pages don't
+  win by length), with words in the title, address and headings worth more,
+  pages with all your words above pages with some, pages that other sites link
+  to a little higher, and at most two results in a row from one site. Search
+  for `"an exact phrase"` or limit to a site with `site:example.com`.
+
+In the app, searches go to the backend of the Kite account the profile is
+linked to, or else to `kite.searchServer` in `desktop/package.json` (or the
+`KITE_SEARCH_SERVER` environment variable). Kite Web asks its own backend.
+The search API (`/__kite/search?q=...&page=N`) is open to your Kite UI and the
+app, read-only and limited to 60 searches a minute per address.
+
+Settings are in `start_home.bat`: `KITE_SEARCH_MAX_PAGES` (default 20000, about
+100 MB of memory), `KITE_SEARCH_CRAWL=0` (stop crawling, keep searching),
+`KITE_SEARCH=0` (off), `KITE_SEARCH_SEEDS` (where to start) and
+`KITE_SEARCH_LEARN=1` (also read the home page of sites people open through
+Kite; only the front page, and read by KiteBot without anyone's cookies).
+KiteBot uses your home internet connection; it's deliberately slow (a few pages
+a second at most). Kite DevTools' **Search** tab shows what it has read and what
+it's waiting to read, can pause it, and can add a site to read next.
 
 ## Kite accounts and Sign in with Google
 

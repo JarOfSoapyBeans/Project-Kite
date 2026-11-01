@@ -39,6 +39,8 @@ export function createKiteServer(config = {}) {
   // One cookie jar per person using Kite (Stage 4).
   // Kite DevTools: recent requests and everything the backend prints.
   const devtools = config.devtools || hub;
+  // Kite Search (search/engine.js), or null.
+  const search = config.search || null;
   if (config.captureConsole !== false) captureConsole(devtools);
 
   const sessions = new Sessions({ file: cookieFile });
@@ -153,7 +155,7 @@ export function createKiteServer(config = {}) {
     }
 
     // Kite's own endpoints check their callers themselves.
-    if (pathname.startsWith(KITE_PREFIX)) return handleKiteApi(req, res, { sessions, allowedOrigins, clientIp: clientIp(req), devtools });
+    if (pathname.startsWith(KITE_PREFIX)) return handleKiteApi(req, res, { sessions, allowedOrigins, clientIp: clientIp(req), devtools, search });
 
     if (!originAllowed(req)) {
       log(
@@ -181,7 +183,9 @@ export function createKiteServer(config = {}) {
 
     if (pathname.startsWith(PREFIX)) {
       notePage(req, pathname);
-      recordRequest(req, res, { realUrl: fullUrl(req.url), target: devtools }); // for Kite DevTools
+      const realUrl = fullUrl(req.url);
+      recordRequest(req, res, { realUrl, target: devtools }); // for Kite DevTools
+      if (search && req.headers["sec-fetch-dest"] === "document") res.on("finish", () => res.statusCode === 200 && search.noteVisit(realUrl));
       const jar = sessions.jarFor(req, res);
       return handleProxy(req, res, { ...proxyOptions, jar, onCookies: () => sessions.changed() });
     }

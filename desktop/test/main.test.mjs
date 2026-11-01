@@ -428,3 +428,25 @@ test("Kite DevTools is only for Kite's own interface", async () => {
   const view = S.views[S.views.length - 1];
   assert.throws(() => call("devtools:events", [0], view.webContents), /not allowed/);
 });
+
+test("Kite Search: the app asks the Kite backend, and passes on only plain results", async () => {
+  const real = globalThis.fetch;
+  const asked = [];
+  globalThis.fetch = async (url) => {
+    asked.push(String(url));
+    return { ok: true, json: async () => ({ total: 2, took: 3, pages: 99, results: [
+      { url: "https://kites.test/", title: "Kites", snippet: [{ text: "about ", hit: false }, { text: "kites", hit: true }], extra: "<b>x</b>" },
+      { url: "javascript:alert(1)", title: "bad" },
+    ] }) };
+  };
+  try {
+    const r = await call("search:query", ["red kites", 2]);
+    assert.equal(asked[0], "https://kite-api.cat-code.org/__kite/search?q=red+kites&page=2");
+    assert.deepEqual(r.results, [{ url: "https://kites.test/", title: "Kites", host: "", snippet: [{ text: "about ", hit: false }, { text: "kites", hit: true }] }]);
+    assert.equal(r.pages, 99);
+    globalThis.fetch = async () => { throw new Error("offline"); };
+    assert.match((await call("search:query", ["x", 1])).error, /Couldn't reach Kite Search/);
+  } finally {
+    globalThis.fetch = real;
+  }
+});

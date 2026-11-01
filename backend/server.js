@@ -11,6 +11,7 @@
 //   COOKIE_FILE            keep site cookies (your logins) across restarts in this file
 
 import { createKiteServer } from "./app.js";
+import { searchFromEnv } from "./search/engine.js";
 import { PREFIX } from "./proxy.js";
 import { WS_PREFIX } from "./websocket.js";
 
@@ -19,7 +20,11 @@ const list = (v) => (v || "").split(",").map((s) => s.trim()).filter(Boolean);
 const PORT = Number(process.env.PORT || 8080);
 const allowedOrigins = list(process.env.ALLOWED_ORIGINS);
 
+// Kite Search: its index and crawler (KiteBot). See search/engine.js.
+const search = searchFromEnv();
+
 const { server, sessions } = createKiteServer({
+  search,
   allowedOrigins,
   allowedPorts: process.env.ALLOWED_PORTS ? list(process.env.ALLOWED_PORTS).map(Number) : undefined,
   maxActivePerIp: Number(process.env.MAX_ACTIVE_PER_IP || 100),
@@ -34,6 +39,7 @@ if (!allowedOrigins.length) console.warn("[warn] ALLOWED_ORIGINS is not set: any
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => {
     sessions.save();
+    if (search) search.saveNow();
     process.exit(0);
   });
 }
@@ -43,5 +49,9 @@ server.listen(PORT, () => {
   console.log(`Allowed origins: ${allowedOrigins.length ? allowedOrigins.join(", ") : "ANY"}`);
   if (process.env.KITE_JS_REWRITE === "0") console.log("Script rewriting (Stage 5): OFF (KITE_JS_REWRITE=0)");
   if (process.env.KITE_CLIENT_OFF) console.log(`Kite's page script, parts OFF for testing: ${process.env.KITE_CLIENT_OFF}`);
+  if (search) {
+    search.start();
+    console.log(`Kite Search: ${search.index.size} pages${search.crawl ? ", KiteBot crawling" : ", not crawling (KITE_SEARCH_CRAWL=0)"}${search.index.file ? ` (saved to ${search.index.file})` : " (in memory: set KITE_SEARCH_FILE to keep it)"}`);
+  } else console.log("Kite Search: off (KITE_SEARCH=0)");
   console.log(`Cookies: ${process.env.COOKIE_FILE ? `saved to ${process.env.COOKIE_FILE}` : "in memory (set COOKIE_FILE to keep them across restarts)"}`);
 });

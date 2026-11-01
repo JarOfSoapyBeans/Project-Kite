@@ -228,3 +228,30 @@ body { display: flex; flex-direction: column; }
 .dt-line.error { background: #3d1c1c; color: #ff9a92; }
 .dt-status { display: grid; grid-template-columns: max-content 1fr; gap: 6px 24px; padding: 8px 4px; font-size: 14px; }
 .devtools .settings { max-width: 860px; }
+
+/* Kite Search (kite://search) */
+.kp.ks { max-width: 760px; margin: 0; padding: 18px 28px 60px; }
+.ks-top { display: flex; align-items: center; gap: 18px; }
+.ks-logo { margin: 0; font-size: 26px; font-weight: 700; color: var(--accent); letter-spacing: -0.5px; }
+.ks-form { flex: 1; display: flex; gap: 8px; }
+.kp .ks-form input { flex: 1; padding: 10px 18px; border-radius: 999px; font-size: 15px; border-color: #343a46; }
+.kp .ks-form input:focus { outline: none; border-color: var(--accent); }
+.kp .ks-form button { border-radius: 999px; padding: 0 18px; }
+.ks.ks-home { margin: 14vh auto 0; text-align: center; }
+.ks-home .ks-top { flex-direction: column; }
+.ks-home .ks-logo { font-size: 56px; }
+.ks-home .ks-form { width: 100%; }
+.ks-info { font-size: 13px; margin: 12px 0 6px 4px; }
+.ks-results { list-style: none; margin: 0; padding: 0; }
+.ks-result { padding: 12px 4px; }
+.ks-url { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#internal .ks-title { display: inline-block; margin: 2px 0 3px; color: #8ab4f8; font-size: 19px; text-decoration: none; }
+#internal .ks-title:hover { text-decoration: underline; }
+#internal .ks-title:visited { color: #c58af9; }
+.ks-snippet { margin: 0; color: #bdc1c6; font-size: 14px; line-height: 1.5; }
+.ks-snippet b { color: var(--text); }
+.ks-pager { display: flex; gap: 14px; margin: 18px 4px; font-size: 14px; flex-wrap: wrap; }
+#internal .ks-pager a { color: #8ab4f8; text-decoration: none; }
+.ks-current { font-weight: 700; }
+.ks-elsewhere { font-size: 13px; margin: 18px 4px; }
+#internal .ks-elsewhere a { color: #8ab4f8; }

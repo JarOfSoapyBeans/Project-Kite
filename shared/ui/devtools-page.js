@@ -3,6 +3,8 @@
 //   Log       Kite Web: the backend's log; the app: page errors, crashes,
 //             pages that didn't load, permissions, downloads, sync
 //   Status    memory, caches, sessions, versions
+//   Search    Kite Web only: Kite Search's crawler (KiteBot): what it read,
+//             its queue, pause/resume, add a site
 //   Switches  Kite Web only: parts of Kite's page script, script rewriting,
 //             the video log (live; reload the tab to see the effect)
 // Drawn from platform.devtools ({ check, events, status, clear, settings }).
@@ -277,9 +279,56 @@ export function renderDevtools(root, ctx) {
       msg);
   }
 
+  // ---------- Search (Kite Web: the crawler) ----------
+  const searchView = el("div", { className: "dt-view", hidden: true });
+  const searchInfo = el("div", { className: "dt-status" });
+  const searchMsg = el("p", { className: "muted" });
+  const recentList = el("div", { className: "dt-log" });
+  const addUrl = el("input", { type: "url", placeholder: "https://a-site-to-add.example/", spellcheck: false });
+  const addForm = el("form", { className: "dt-tools" }, addUrl, el("button", { type: "submit", textContent: "Add to the crawl" }));
+  const pauseCrawl = el("button", { type: "button", textContent: "Pause crawling" });
+  searchView.append(el("div", { className: "dt-tools" }, pauseCrawl), searchInfo, addForm, searchMsg, el("h3", { textContent: "Just read" }), recentList);
+  let crawlPaused = false;
+  async function searchAction(body) {
+    try {
+      drawSearch(await dt.search(body));
+      if (body) searchMsg.textContent = body.action === "add" ? "Added: KiteBot reads it next." : "";
+    } catch (err) {
+      searchMsg.textContent = err.message;
+    }
+  }
+  pauseCrawl.addEventListener("click", () => searchAction({ action: crawlPaused ? "resume" : "pause" }));
+  addForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    if (addUrl.value.trim()) searchAction({ action: "add", url: addUrl.value.trim() }).then(() => (addUrl.value = ""));
+  });
+  function drawSearch(s) {
+    const c = s.crawler || {};
+    crawlPaused = Boolean(c.paused) || !c.running;
+    pauseCrawl.textContent = crawlPaused ? "Start crawling" : "Pause crawling";
+    searchInfo.textContent = "";
+    const rows = [
+      ["Pages in Kite Search", `${Number(s.pages).toLocaleString()} of ${Number(s.maxPages).toLocaleString()} (${Number(s.sites).toLocaleString()} sites, ${Number(s.terms).toLocaleString()} words)`],
+      ["KiteBot", c.running ? (c.paused ? "paused" : `crawling, ${c.active} at once`) : "not crawling (KITE_SEARCH_CRAWL=0)"],
+      ["Waiting to be read", `${Number(c.queued || 0).toLocaleString()} pages on ${Number(c.sitesQueued || 0).toLocaleString()} sites`],
+      ["Read since start", `${c.crawled || 0} (${c.indexed || 0} added, ${c.skipped || 0} skipped, ${c.failed || 0} failed)`],
+      ["Searches since start", String(s.searches || 0)],
+      ["Learning from browsing", s.learn ? "on (KITE_SEARCH_LEARN=1)" : "off"],
+    ];
+    for (const [k, v] of rows) searchInfo.append(...pair(k, v));
+    recentList.textContent = "";
+    for (const r of c.recent || []) {
+      const bad = /failed|HTTP [45]/.test(r.result);
+      recentList.append(el("div", { className: "dt-line" + (bad ? " warn" : "") },
+        el("span", { className: "dt-time", textContent: time(r.time) }),
+        el("span", { textContent: `${r.result}  ${r.url}${r.title ? "  — " + r.title : ""}${r.error ? "  (" + r.error + ")" : ""}` })));
+    }
+  }
+  const refreshSearch = () => searchAction(null);
+
   // ---------- tabs and polling ----------
-  const views = { requests: reqView, log: logView, status: statusView, ...(dt.settings ? { switches: switchView } : {}) };
-  const names = { requests: "Requests", log: "Log", status: "Status", switches: "Switches" };
+  const views = { requests: reqView, log: logView, status: statusView, ...(dt.search ? { search: searchView } : {}), ...(dt.settings ? { switches: switchView } : {}) };
+  const names = { requests: "Requests", log: "Log", status: "Status", search: "Search", switches: "Switches" };
   const tabButtons = {};
   for (const k of Object.keys(views)) {
     const b = el("button", { type: "button", className: "dt-tab", textContent: names[k], role: "tab" });
@@ -297,6 +346,7 @@ export function renderDevtools(root, ctx) {
     }
     if (k === "status") refreshStatus();
     if (k === "switches") drawSwitches();
+    if (k === "search") refreshSearch();
   }
   async function refreshStatus() {
     try {
@@ -335,6 +385,7 @@ export function renderDevtools(root, ctx) {
         note.textContent = `Couldn't get events: ${err.message}`;
       }
       if (state.view === "status") refreshStatus();
+      if (state.view === "search") refreshSearch();
     }
     if (alive()) setTimeout(poll, POLL_MS);
   }

@@ -67,8 +67,8 @@ function showContent(tab) {
   if (tab.page) {
     platform.showView(null); // hide every real page
     internalEl.hidden = false;
-    if (!shownPage || shownPage.tabId !== tab.id || shownPage.name !== tab.page) {
-      shownPage = { tabId: tab.id, name: tab.page, view: renderPage(tab.page, internalEl, pageContext) };
+    if (!shownPage || shownPage.tabId !== tab.id || shownPage.name !== tab.page || shownPage.url !== tab.url) {
+      shownPage = { tabId: tab.id, name: tab.page, url: tab.url, view: renderPage(tab.page, internalEl, pageContext, tab.url || "kite://newtab") };
     }
   } else {
     internalEl.hidden = true;
@@ -139,11 +139,15 @@ const tabById = (id) => tabs.find((t) => t.id === id);
 
 // ---------- navigation ----------
 
-// Show one of Kite's own pages in a tab.
-function openPage(tab, name) {
+// Show one of Kite's own pages in a tab (url: with its query, kite://search?q=...).
+function openPage(tab, name, url = null) {
   tab.page = name;
-  tab.url = name === "newtab" ? null : "kite://" + name;
+  tab.url = name === "newtab" ? null : url && pageOf(url) === name ? url.trim() : "kite://" + name;
   tab.title = PAGES[name];
+  if (name === "search") {
+    const q = new URLSearchParams(tab.url.split("?")[1] || "").get("q");
+    if (q) tab.title = `${q} - Kite Search`;
+  }
   tab.loading = false;
   tab.security = "kite";
   renderTab(tab);
@@ -158,11 +162,17 @@ function openPage(tab, name) {
 
 async function navigate(input, tab = activeTab) {
   if (!tab) return;
-  const page = pageOf(input);
-  if (page) return openPage(tab, page);
-  const url = toUrl(input, settings().searchEngine);
+  const url = pageOf(input) ? String(input).trim() : toUrl(input, settings().searchEngine);
   if (!url) return;
+  // One of Kite's pages (a search with Kite is kite://search?q=...).
+  const page = pageOf(url);
+  if (page) {
+    if (!tab.page) tab.returnTo = null;
+    return openPage(tab, page, url);
+  }
   const leaving = Boolean(tab.page);
+  // Leaving Kite's search results for a result: Back comes back to them.
+  tab.returnTo = leaving && tab.page === "search" ? { url: tab.url, firstUrl: null } : leaving ? null : tab.returnTo;
   tab.page = null;
   tab.url = url;
   tab.title = "";
@@ -180,8 +190,14 @@ function reloadAll() {
   for (const tab of tabs) if (tab.url && !tab.page) navigate(tab.url, tab);
 }
 
-// Back from one of Kite's pages returns to the website the tab was on.
+// Back from one of Kite's pages returns to the website the tab was on; Back
+// from the first page opened from Kite's search results returns to them.
 function goBack(tab) {
+  if (!tab.page && tab.returnTo && tab.returnTo.firstUrl && tab.url === tab.returnTo.firstUrl) {
+    const to = tab.returnTo.url;
+    tab.returnTo = null;
+    return openPage(tab, "search", to);
+  }
   if (tab.page && tab.viewUrl) {
     tab.page = null;
     tab.url = tab.viewUrl;
@@ -324,6 +340,12 @@ const pageContext = {
   sync: platform.sync || null, // the app: syncing with a Kite account
   platformName: platform.kind === "desktop" ? "app" : "web",
   devtools: platform.devtools || null, // Kite DevTools (kite://devtools)
+  search: platform.search || null, // Kite Search (kite://search)
+  setTitle: (title) => {
+    if (!activeTab || !activeTab.page) return;
+    activeTab.title = title;
+    renderTab(activeTab);
+  },
 };
 
 store.onChange((name) => {
@@ -343,6 +365,7 @@ platform.start({
     const tab = tabById(id);
     if (!tab) return;
     if ("url" in info && info.url) tab.viewUrl = info.url;
+    if (tab.returnTo && !tab.returnTo.firstUrl && "url" in info && info.url && !tab.page) tab.returnTo.firstUrl = info.url;
     if ("title" in info && tab.viewUrl) tab.viewTitle = info.title;
     if (tab.page) return; // a Kite page is showing; its real page waits underneath
     const changedUrl = "url" in info && (info.url || null) !== tab.url;

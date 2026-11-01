@@ -12,5 +12,8 @@
   },
   "devDependencies": {
     "electron": "latest"
+  },
+  "kite": {
+    "searchServer": "https://kite-api.cat-code.org"
   }
 }

@@ -361,7 +361,7 @@ class KiteWindow {
 
     wc.on("context-menu", (_e, params) => {
       const nav = wc.navigationHistory || wc;
-      const items = pageMenu(params, { canGoBack: nav.canGoBack(), canGoForward: nav.canGoForward(), searchName: "Bing" }, (a, v) =>
+      const items = pageMenu(params, { canGoBack: nav.canGoBack(), canGoForward: nav.canGoForward(), searchName: "the web" }, (a, v) =>
         this.pageAction(id, a, v)
       );
       Menu.buildFromTemplate(items).popup({ window: this.win });
@@ -624,6 +624,47 @@ function windowOf(event) {
   return null;
 }
 
+// Kite Search: the app asks a Kite backend for results. The profile's linked
+// Kite account's backend if there is one, else KITE_SEARCH_SERVER, else the one
+// this build of Kite comes with ("kite.searchServer" in package.json).
+function searchServer(profile) {
+  const linked = !profile.guest && sync.status && sync.status(profile.id).backend;
+  if (linked) return linked;
+  if (process.env.KITE_SEARCH_SERVER) return process.env.KITE_SEARCH_SERVER;
+  try {
+    return require("./package.json").kite.searchServer || null;
+  } catch {
+    return null;
+  }
+}
+async function searchQuery(profile, q, page) {
+  const server = searchServer(profile);
+  if (!server) return { error: "No Kite backend to search with: link this profile to your Kite account in Settings." };
+  let base;
+  try {
+    base = new URL(server);
+    if (base.protocol !== "https:" && base.protocol !== "http:") throw new Error();
+  } catch {
+    return { error: "The Kite Search address isn't a web address." };
+  }
+  const url = new URL("/__kite/search", base.origin);
+  url.searchParams.set("q", String(q || "").slice(0, 300));
+  url.searchParams.set("page", String(Math.max(1, Math.min(50, Number(page) || 1))));
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    const answer = await r.json().catch(() => ({}));
+    if (!r.ok) return { error: answer.error || `Kite Search answered ${r.status}.` };
+    // Only what the results page uses, and only web addresses.
+    const results = (Array.isArray(answer.results) ? answer.results : []).filter((x) => x && /^https?:\/\//i.test(String(x.url))).slice(0, 20).map((x) => ({
+      url: String(x.url), title: String(x.title || "").slice(0, 300), host: String(x.host || ""),
+      snippet: (Array.isArray(x.snippet) ? x.snippet : []).slice(0, 80).map((s) => ({ text: String(s && s.text || "").slice(0, 500), hit: Boolean(s && s.hit) })),
+    }));
+    return { results, total: Number(answer.total) || 0, took: Number(answer.took) || 0, pages: Number(answer.pages) || 0, query: String(answer.query || "") };
+  } catch (err) {
+    return { error: `Couldn't reach Kite Search at ${base.host}.` };
+  }
+}
+
 // The app at a glance, for Kite DevTools.
 function devtoolsStatus(kw) {
   let memory = null;
@@ -727,6 +768,7 @@ function wireIpc() {
   on("devtools:events", (kw, since, limit) => devlog.since(kw.profile.id, n(since) || 0, Math.min(2000, n(limit) || 500)));
   on("devtools:clear", (kw) => devlog.clear(kw.profile.id));
   on("devtools:status", (kw) => devtoolsStatus(kw));
+  on("search:query", (kw, q, page) => searchQuery(kw.profile, q, page));
   on("ui:inset", (kw, px) => {
     kw.inset = Math.max(0, Math.min(600, Math.round(n(px) || 0)));
     kw.layout();

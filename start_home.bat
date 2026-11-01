@@ -43,6 +43,16 @@ rem     set GOOGLE_CLIENT_SECRET=...
 rem     set KITE_GOOGLE_ALLOWED=you@gmail.com
 rem See "Kite accounts and Sign in with Google" in README.md.
 
+rem Kite Search: Kite's own search engine. Its crawler (KiteBot) reads public
+rem web pages from your internet connection, politely (robots.txt, one page per
+rem site every 1.5 seconds, 4 sites at a time) and keeps up to this many pages.
+rem   KITE_SEARCH_CRAWL=0   keep searching what's indexed, but stop crawling
+rem   KITE_SEARCH=0         no Kite Search at all
+rem   KITE_SEARCH_LEARN=1   also read the home pages of sites people open in Kite
+rem   KITE_SEARCH_SEEDS=https://a.example/,https://b.example/   where to start
+set KITE_SEARCH_CRAWL=1
+set KITE_SEARCH_MAX_PAGES=20000
+
 rem ------------------------------------------------------------------
 
 rem Your private settings (not in git), if you made the file.
@@ -52,6 +62,8 @@ rem Behind a Cloudflare Tunnel: take visitors' real IPs from Cloudflare.
 set TRUST_CF=1
 rem Keep site cookies (your logins) across restarts. Private, git-ignored.
 set COOKIE_FILE=%~dp0.kite-cookies.json
+rem Kite Search's index (and KiteBot's queue). Private, git-ignored.
+set KITE_SEARCH_FILE=%~dp0.kite-search.ndjson
 rem The frontend talks to the backend through the tunnel.
 set BACKEND_URL=https://%TUNNEL_HOST%
 rem Where Google sends you back after signing in (add it to your OAuth client).

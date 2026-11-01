@@ -16,6 +16,9 @@
 //   GET  /__kite/google/start, /__kite/google/callback   the Google sign-in popup (google.js)
 //   GET  /__kite/data              your account's history, bookmarks, shortcuts, settings
 //   GET  /__kite/data/versions     just their versions (for "has anything changed?")
+//   GET  /__kite/search?q=...&page=N   Kite Search results (anyone; rate-limited)
+//   GET  /__kite/search/suggest?q=...  titles starting with what you've typed
+//   GET  /__kite/devtools/search, POST {action: pause|resume|add|remove, url}: the crawler
 //   GET  /__kite/devtools/check    may this Kite account use Kite DevTools?   (Kite UI only)
 //   GET  /__kite/devtools/events?since=N, /status; POST /settings, /clear
 //                                  Kite DevTools (accounts in KITE_DEVTOOLS_USERS only)
@@ -151,8 +154,20 @@ function codeTryAllowed(ip) {
   return list.length <= 10;
 }
 
+// Searches: at most 60 a minute per address.
+const searchTimes = new Map(); // ip -> [times]
+function searchAllowed(ip) {
+  const now = Date.now();
+  const list = (searchTimes.get(ip) || []).filter((t) => now - t < 60_000);
+  list.push(now);
+  searchTimes.set(ip, list);
+  if (searchTimes.size > 20000) searchTimes.delete(searchTimes.keys().next().value);
+  return list.length <= 60;
+}
+
 // For tests.
 export function resetLimits() {
+  searchTimes.clear();
   failures.clear();
   signups.clear();
   codeTries.clear();
@@ -192,7 +207,7 @@ async function dataEndpoint(req, res, pathname, account, sessions, cors) {
 const hashTokenOf = (t) => hashToken(t);
 
 // Returns true if the request was a /__kite/ request (and has been answered).
-export async function handleKiteApi(req, res, { sessions, allowedOrigins = [], clientIp = "unknown", devtools = hub }) {
+export async function handleKiteApi(req, res, { sessions, allowedOrigins = [], clientIp = "unknown", devtools = hub, search = null }) {
   const { pathname } = new URL(req.url, "http://localhost");
   if (!pathname.startsWith(KITE_PREFIX)) return false;
   res.setHeader("x-kite-source", "kite");
@@ -226,6 +241,25 @@ export async function handleKiteApi(req, res, { sessions, allowedOrigins = [], c
   if (pathname === "/__kite/google/start" || pathname === "/__kite/google/callback") {
     await handleGoogle(req, res, { allowedOrigins, config: GOOGLE });
     return true;
+  }
+
+  // ---------- Kite Search ----------
+  // Open to the Kite UI and the Kite app (which asks from its own process,
+  // without an Origin). Read-only, and only public pages are in the index.
+  if (pathname === "/__kite/search" || pathname === "/__kite/search/suggest") {
+    const origin = req.headers.origin;
+    const fromUi = origin && (!allowedOrigins.length || allowedOrigins.includes(origin));
+    const cors = fromUi ? { "access-control-allow-origin": origin, vary: "Origin" } : {};
+    const json = (status, value) => send(res, status, JSON.stringify(value), { ...cors, "content-type": "application/json", "cache-control": "no-store" });
+    if (req.method === "OPTIONS") return send(res, fromUi ? 204 : 403, "", { ...cors, "access-control-allow-methods": "GET" }), true;
+    if (origin && !fromUi) return json(403, { error: "Not from Kite." }), true;
+    if (req.method !== "GET") return send(res, 405, "", cors), true;
+    if (!search) return json(404, { error: "Kite Search is off on this backend (KITE_SEARCH=0)." }), true;
+    if (!searchAllowed(clientIp)) return json(429, { error: "Too many searches. Wait a minute." }), true;
+    const q = new URL(req.url, "http://localhost").searchParams;
+    if (pathname === "/__kite/search/suggest") return json(200, { suggestions: search.index.suggest(q.get("q") || "") }), true;
+    const page = Math.max(1, Math.min(50, Number(q.get("page")) || 1));
+    return json(200, search.search(String(q.get("q") || "").slice(0, 300), { page, perPage: 10 })), true;
   }
 
   // ---------- the Kite app (linked with a token) ----------
@@ -283,7 +317,25 @@ export async function handleKiteApi(req, res, { sessions, allowedOrigins = [], c
       if (!allowed) return json(403, { error: allowedUsers.length ? "Your Kite account isn't allowed to use Kite DevTools." : "Kite DevTools is off: set KITE_DEVTOOLS_USERS on the backend." }), true;
       const q = new URL(req.url, "http://localhost").searchParams;
       if (pathname === "/__kite/devtools/events") return json(200, devtools.since(Number(q.get("since")) || 0, Math.min(2000, Number(q.get("limit")) || 500))), true;
-      if (pathname === "/__kite/devtools/status") return json(200, devtoolsStatus(sessions)), true;
+      if (pathname === "/__kite/devtools/status") return json(200, { ...devtoolsStatus(sessions), search: search ? search.status() : null }), true;
+      if (pathname === "/__kite/devtools/search") {
+        if (!search) return json(404, { error: "Kite Search is off on this backend." }), true;
+        if (req.method === "POST") {
+          let body = {};
+          try {
+            body = JSON.parse((await readBody(req, 4096)) || "{}");
+          } catch {}
+          if (body.action === "pause") search.crawler.pause(true);
+          else if (body.action === "resume") {
+            search.crawler.pause(false);
+            if (!search.crawler.running) (search.crawl = true), search.crawler.start();
+          } else if (body.action === "add") {
+            if (!search.crawler.add(String(body.url || ""), 0, { force: true })) return json(400, { error: "That isn't a web page address Kite can read." }), true;
+            console.log(`[search] added to the crawl: ${body.url}`);
+          } else if (body.action === "remove") search.index.remove(String(body.url || ""));
+        }
+        return json(200, search.status()), true;
+      }
       if (req.method !== "POST") return send(res, 405, "", cors), true;
       if (pathname === "/__kite/devtools/clear") return devtools.clear(), json(200, { ok: true }), true;
       if (pathname === "/__kite/devtools/settings") {

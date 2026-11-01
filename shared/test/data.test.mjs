@@ -62,5 +62,9 @@ test("the interface's store keeps only well-formed data", async () => {
   assert.deepEqual(clean("history", { evil: 1 }), []);
   assert.deepEqual(clean("bookmarks", [{ url: "https://a/" }, null, 5, { title: "no url" }]), [{ url: "https://a/" }]);
   assert.deepEqual(clean("session", ["https://a/", 7]), ["https://a/"]);
-  assert.equal(clean("settings", "nonsense").searchEngine, "bing");
+  assert.equal(clean("settings", "nonsense").searchEngine, "kite");
+  // Bing used to be the default: moved to Kite Search, unless chosen in Settings.
+  assert.equal(clean("settings", { searchEngine: "bing" }).searchEngine, "kite");
+  assert.equal(clean("settings", { searchEngine: "bing", searchEngineChosen: true }).searchEngine, "bing");
+  assert.equal(clean("settings", { searchEngine: "google" }).searchEngine, "google");
 });

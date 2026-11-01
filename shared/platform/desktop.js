@@ -65,6 +65,9 @@ const platform = {
     now: () => bridge.syncNow(),
   },
 
+  // Kite Search (kite://search): asked by the app from your Kite backend.
+  search: (q, page) => bridge.searchQuery(q, page),
+
   // Kite DevTools: this profile's requests, page errors, crashes, downloads, sync.
   devtools: {
     check: async () => ({ allowed: true }),

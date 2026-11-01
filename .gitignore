@@ -4,6 +4,8 @@ node_modules/
 # Site cookies (your logins), see COOKIE_FILE in backend/server.js
 .kite-cookies.json*
 *.cookies.json
+# Kite Search's index and crawl queue (KITE_SEARCH_FILE)
+.kite-search.ndjson*
 # Built by `npm run build` in /frontend (from /shared)
 frontend/dist/
 # Tunnel settings made by start_home.bat
