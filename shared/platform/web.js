@@ -124,7 +124,11 @@ const platform = {
 
   createView(id) {
     const f = document.createElement("iframe");
-    f.setAttribute("allow", "fullscreen; autoplay; clipboard-write; picture-in-picture");
+    // What a page in a tab may use. A frame only gets what's listed here (a page
+    // shown on its own gets all of it): YouTube's player checks for protected
+    // video ("encrypted-media"), and 360-degree videos use the motion sensors.
+    // Same list as YouTube's own embed code, plus storage access.
+    f.setAttribute("allow", "fullscreen; autoplay; encrypted-media; picture-in-picture; clipboard-write; accelerometer; gyroscope; web-share; storage-access");
     // Some hosts send "Referrer-Policy: same-origin", which would hide where the
     // request came from. The backend needs our origin to allow the request.
     f.referrerPolicy = "origin";
