@@ -100,6 +100,30 @@ export function createKiteServer(config = {}) {
       return true;
     };
   }
+  // The site each visitor last opened a page from. A page's script sometimes asks
+  // for a path Kite didn't rewrite ("/s/player/base.js") and the browser sends no
+  // usable Referer with it; it almost certainly belongs to that site.
+  const lastPage = new Map(); // kite_sid (or IP) -> origin
+  const visitorKey = (req) => (/(?:^|;\s*)kite_sid=([A-Za-z0-9_-]{16,64})/.exec(req.headers.cookie || "") || [])[1] || "ip:" + clientIp(req);
+  function notePage(req, pathname) {
+    const dest = req.headers["sec-fetch-dest"];
+    if (dest !== "document" && dest !== "iframe") return;
+    const real = decodeUrl(pathname.slice(PREFIX.length).split("/")[0]);
+    if (!real) return;
+    lastPage.delete(visitorKey(req));
+    lastPage.set(visitorKey(req), new URL(real).origin);
+    if (lastPage.size > 5000) lastPage.delete(lastPage.keys().next().value);
+  }
+  function resolveViaLastPage(req, path) {
+    if (req.headers["sec-fetch-site"] !== "same-origin") return null; // only a proxied page's own requests
+    const origin = lastPage.get(visitorKey(req));
+    try {
+      return origin ? new URL(path, origin).href : null;
+    } catch {
+      return null;
+    }
+  }
+
   const requestSlot = limiter(maxActivePerIp);
   const socketSlot = limiter(maxWebSocketsPerIp);
 
@@ -139,13 +163,14 @@ export function createKiteServer(config = {}) {
     });
 
     if (pathname.startsWith(PREFIX)) {
+      notePage(req, pathname);
       const jar = sessions.jarFor(req, res);
       return handleProxy(req, res, { ...proxyOptions, jar, onCookies: () => sessions.changed() });
     }
 
     // A page asked for a root-relative URL we didn't rewrite (e.g. "/logo.png"
     // built by JavaScript). Send it to the matching proxied URL.
-    const abs = resolveViaReferer(req, req.url);
+    const abs = resolveViaReferer(req, req.url) || resolveViaLastPage(req, req.url);
     if (abs) {
       res.writeHead(307, { location: toProxyUrl(abs) });
       return res.end();
