@@ -137,6 +137,19 @@ export function removeShortcut(custom, history, url) {
   return base.filter((s) => s.url !== url);
 }
 
+// ---------- checking stored data ----------
+
+// Data can come from disk, another device or an old version of Kite: keep only
+// the expected shape (lists of objects with a text url), so a bad value can't
+// break the interface.
+const isEntry = (x) => x && typeof x === "object" && typeof x.url === "string";
+export function clean(name, value) {
+  if (name === "settings") return withDefaults(value && typeof value === "object" ? value : {});
+  if (!Array.isArray(value)) return [];
+  if (name === "session") return value.filter((u) => typeof u === "string");
+  return value.filter(isEntry);
+}
+
 // ---------- the last session's tabs ----------
 
 export function sessionFrom(tabs) {

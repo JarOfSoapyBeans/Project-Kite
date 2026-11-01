@@ -269,7 +269,7 @@ function renderBookmarksBar() {
   barEl.textContent = "";
   for (const b of list) {
     const a = document.createElement("a");
-    a.href = b.url;
+    a.href = isWeb(b.url) ? b.url : "#"; // stored or synced data: only websites are links
     a.className = "bm";
     a.textContent = b.title || b.url;
     a.title = `${b.title}\n${b.url}`;

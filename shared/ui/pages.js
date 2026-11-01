@@ -54,7 +54,8 @@ function icon(url, ctx, big = false) {
 
 // A link that opens in this tab, or a new one with Ctrl/middle click.
 function link(url, text, ctx, className = "") {
-  const a = el("a", { href: url, textContent: text ?? url, className }); // "" = no text (icon tiles)
+  // Stored or synced data: only websites become real links.
+  const a = el("a", { href: /^https?:\/\//i.test(String(url)) ? url : "#", textContent: text ?? url, className }); // "" = no text (icon tiles)
   a.addEventListener("click", (e) => {
     e.preventDefault();
     ctx.open(url, { newTab: e.ctrlKey || e.metaKey || e.shiftKey });

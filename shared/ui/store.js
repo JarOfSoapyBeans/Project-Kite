@@ -4,7 +4,7 @@
 //   Kite Web       this browser (localStorage), or your Kite account (part 5)
 // Other windows of the same profile can change it too; the platform tells us.
 
-import { withDefaults } from "./lib/data.js";
+import { clean } from "./lib/data.js";
 
 export const NAMES = ["history", "bookmarks", "shortcuts", "settings", "session"];
 
@@ -19,11 +19,7 @@ export async function openStore(platform) {
       }
     })
   );
-  values.history ||= [];
-  values.bookmarks ||= [];
-  values.shortcuts ||= [];
-  values.session ||= [];
-  values.settings = withDefaults(values.settings);
+  for (const name of NAMES) values[name] = clean(name, values[name]);
 
   const listeners = new Set();
   const timers = {};
@@ -31,7 +27,7 @@ export async function openStore(platform) {
     get: (name) => values[name],
     // Replace one kind of data; saved a moment later, in one go.
     set(name, value) {
-      values[name] = name === "settings" ? withDefaults(value) : value;
+      values[name] = clean(name, value);
       clearTimeout(timers[name]);
       timers[name] = setTimeout(() => platform.saveData(name, values[name]), name === "history" ? 1500 : 200);
       for (const fn of listeners) fn(name);
@@ -42,7 +38,7 @@ export async function openStore(platform) {
   if (platform.onDataChanged) {
     platform.onDataChanged((name, value) => {
       if (!NAMES.includes(name)) return;
-      values[name] = name === "settings" ? withDefaults(value) : value || [];
+      values[name] = clean(name, value);
       for (const fn of listeners) fn(name);
     });
   }

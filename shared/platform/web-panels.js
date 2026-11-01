@@ -68,8 +68,11 @@ export function initWebPanels({ backend, reloadAll, resetBackend, accountChanged
   const accountMsg = document.getElementById("account-message");
   let currentUser = null;
 
-  async function accountApi(path, body) {
-    const r = await fetch(backend() + "/__kite/account" + path, {
+  // Kite's own endpoints: /__kite/account/... (accountApi) and /__kite/sync/... (syncApi).
+  const accountApi = (path, body) => kiteApi("/__kite/account" + path, body);
+  const syncApi = (path, body) => kiteApi("/__kite/sync" + path, body);
+  async function kiteApi(path, body) {
+    const r = await fetch(backend() + path, {
       method: body ? "POST" : "GET",
       credentials: "include",
       headers: body ? { "content-type": "application/json" } : undefined,
@@ -186,7 +189,7 @@ export function initWebPanels({ backend, reloadAll, resetBackend, accountChanged
     if (!currentUser) return;
     let list = [];
     try {
-      list = (await accountApi("/../sync/devices")).devices || [];
+      list = (await syncApi("/devices")).devices || [];
     } catch {}
     for (const d of list) {
       const li = document.createElement("li");
@@ -196,7 +199,7 @@ export function initWebPanels({ backend, reloadAll, resetBackend, accountChanged
       unlink.type = "button";
       unlink.textContent = "Unlink";
       unlink.addEventListener("click", async () => {
-        await accountApi("/../sync/unlink", { id: d.id }).catch(() => {});
+        await syncApi("/unlink", { id: d.id }).catch(() => {});
         renderLinkedApps();
       });
       li.append(label, unlink);
@@ -206,7 +209,7 @@ export function initWebPanels({ backend, reloadAll, resetBackend, accountChanged
   document.getElementById("link-app").addEventListener("click", async () => {
     const box = document.getElementById("link-app-box");
     try {
-      const { code, expires } = await accountApi("/../sync/link-code", {});
+      const { code, expires } = await syncApi("/link-code", {});
       document.getElementById("link-backend").textContent = backend();
       document.getElementById("link-code").textContent = code;
       document.getElementById("link-expiry").textContent = `works once, until ${new Date(expires).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;

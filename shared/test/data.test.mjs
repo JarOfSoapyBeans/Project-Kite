@@ -56,3 +56,11 @@ test("settings: defaults, and nothing unexpected kept", () => {
   assert.ok(!("evil" in s));
   assert.deepEqual(D.sessionFrom([{ url: "https://a/" }, { url: null }, { url: "kite://history" }]), ["https://a/"]);
 });
+
+test("the interface's store keeps only well-formed data", async () => {
+  const { clean } = D;
+  assert.deepEqual(clean("history", { evil: 1 }), []);
+  assert.deepEqual(clean("bookmarks", [{ url: "https://a/" }, null, 5, { title: "no url" }]), [{ url: "https://a/" }]);
+  assert.deepEqual(clean("session", ["https://a/", 7]), ["https://a/"]);
+  assert.equal(clean("settings", "nonsense").searchEngine, "bing");
+});
