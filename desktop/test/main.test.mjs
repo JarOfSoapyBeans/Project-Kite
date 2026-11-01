@@ -442,7 +442,7 @@ test("Kite Search: the app asks the Kite backend, and passes on only plain resul
   try {
     const r = await call("search:query", ["red kites", 2]);
     assert.equal(asked[0], "https://kite-api.cat-code.org/__kite/search?q=red+kites&page=2");
-    assert.deepEqual(r.results, [{ url: "https://kites.test/", title: "Kites", host: "", snippet: [{ text: "about ", hit: false }, { text: "kites", hit: true }] }]);
+    assert.deepEqual(r.results, [{ url: "https://kites.test/", title: "Kites", host: "", snippet: [{ text: "about ", hit: false }, { text: "kites", hit: true }], missing: [] }]);
     assert.equal(r.pages, 99);
     globalThis.fetch = async () => { throw new Error("offline"); };
     assert.match((await call("search:query", ["x", 1])).error, /Couldn't reach Kite Search/);

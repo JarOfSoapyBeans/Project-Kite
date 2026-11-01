@@ -255,3 +255,6 @@ body { display: flex; flex-direction: column; }
 .ks-current { font-weight: 700; }
 .ks-elsewhere { font-size: 13px; margin: 18px 4px; }
 #internal .ks-elsewhere a { color: #8ab4f8; }
+.ks-missing { margin: 3px 0 0; font-size: 13px; color: var(--muted); }
+.ks-missing s { color: #9aa0a6; }
+.ks-partial { padding: 14px 4px 2px; font-size: 13px; border-top: 1px solid #2a2f39; margin-top: 6px; }

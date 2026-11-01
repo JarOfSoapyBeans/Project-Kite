@@ -296,11 +296,22 @@ It runs on your Kite backend (`backend/search/`, no dependencies):
   description and the start of its text (for snippets), and is saved to
   `.kite-search.ndjson` next to `start_home.bat` (git-ignored), together with
   KiteBot's queue, so a restart carries on.
-- **Ranking**: BM25 (rare words count more, repeats count less, long pages don't
-  win by length), with words in the title, address and headings worth more,
-  pages with all your words above pages with some, pages that other sites link
-  to a little higher, and at most two results in a row from one site. Search
-  for `"an exact phrase"` or limit to a site with `site:example.com`.
+- **Ranking looks at the whole search**, not word by word:
+  - Question words ("how do I", "what is the best way to") are left out, so the
+    words that carry the meaning decide.
+  - Pages with all (or nearly all) of the search come first. A word counts by
+    how rare it is, so missing "kite" costs more than missing "well". Pages with
+    only part of it come after, marked "Missing: …". Pages with only a small part
+    (say, just the most common word) are left out.
+  - Words close together and in the order you typed them rank higher
+    ("paper kite" beats a page with "paper" and "kite" far apart).
+  - Words the best matches share ("string", "tail", "spar" for a search about
+    making kites) lift other pages about the same thing.
+  - Then BM25 for each word (rare words count more, repeats less, long pages
+    don't win by length), with the title, address and headings worth more,
+    pages other sites link to a little higher, and at most two results in a row
+    from one site. Search for `"an exact phrase"` or limit to a site with
+    `site:example.com`.
 
 In the app, searches go to the backend of the Kite account the profile is
 linked to, or else to `kite.searchServer` in `desktop/package.json` (or the

@@ -658,8 +658,9 @@ async function searchQuery(profile, q, page) {
     const results = (Array.isArray(answer.results) ? answer.results : []).filter((x) => x && /^https?:\/\//i.test(String(x.url))).slice(0, 20).map((x) => ({
       url: String(x.url), title: String(x.title || "").slice(0, 300), host: String(x.host || ""),
       snippet: (Array.isArray(x.snippet) ? x.snippet : []).slice(0, 80).map((s) => ({ text: String(s && s.text || "").slice(0, 500), hit: Boolean(s && s.hit) })),
+      missing: (Array.isArray(x.missing) ? x.missing : []).slice(0, 12).map((w) => String(w).slice(0, 40)),
     }));
-    return { results, total: Number(answer.total) || 0, took: Number(answer.took) || 0, pages: Number(answer.pages) || 0, query: String(answer.query || "") };
+    return { results, total: Number(answer.total) || 0, complete: Number(answer.complete) || 0, took: Number(answer.took) || 0, pages: Number(answer.pages) || 0, query: String(answer.query || "") };
   } catch (err) {
     return { error: `Couldn't reach Kite Search at ${base.host}.` };
   }

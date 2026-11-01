@@ -179,3 +179,37 @@ test("the search API: results for the Kite UI and the app, others refused", asyn
     k.server.close();
   }
 });
+
+test("whole searches: question words dropped, pages with all of it first, close words and order count, related words", () => {
+  const ix = new SearchIndex();
+  const add = (url, title, text) => ix.add({ url, title, description: "", headings: [], text, links: [] });
+  add("https://howto.test/paper-kite", "How to make a paper kite", "Fold the paper in half, add a bamboo spar, tie the string and glue a tail. A paper kite made this way flies well in light wind.");
+  add("https://birds.test/kite", "Kite (bird)", "The kite is a bird of prey. Kites fly over open fields and eat mice. Kites are kites.");
+  add("https://paper.test/making", "How paper is made", "To make paper, wood pulp is pressed and dried. Paper mills make tons of paper every day.");
+  add("https://far.test/a", "Notes", "paper " + "word ".repeat(80) + "kite make flies well");
+  add("https://shop.test/plastic", "Plastic kite kit", "Make a plastic kite: string, tail, spar and sail. It flies well.");
+  add("https://club.test/build", "Kite building day", "We make kites from paper and bamboo: cut the spar, tie the string, add a tail. Our kites flew well.");
+  for (let i = 0; i < 20; i++) add(`https://other.test/${i}`, `Other page ${i}`, `Something about gardens and cooking number ${i} ${"z".repeat(i + 1)}`);
+
+  const q = parseQuery("How do I make a paper kite that flies well?");
+  assert.deepEqual(q.terms, ["make", "paper", "kite", "fly", "well"], "question words left out");
+  const r = ix.search("How do I make a paper kite that flies well?");
+  assert.equal(r.results[0].url, "https://howto.test/paper-kite", JSON.stringify(r.results.map((x) => x.url)));
+  const urls = r.results.map((x) => x.url);
+  assert.ok(urls.includes("https://club.test/build"), "pages with the whole search are found");
+  assert.ok(!urls.includes("https://birds.test/kite"), "a page with only one common word of a long search isn't related to it");
+  assert.ok(!urls.some((u) => u.startsWith("https://other.test/")), "unrelated pages left out");
+  assert.ok(urls.indexOf("https://howto.test/paper-kite") < urls.indexOf("https://far.test/a"), "words together beat words far apart");
+  const bird = r.results.find((x) => x.url === "https://birds.test/kite");
+  assert.ok(!bird || bird.missing.includes("paper"), "part-matches say what they're missing");
+  assert.deepEqual(r.results[0].missing, []);
+  assert.ok(r.complete >= 2);
+  assert.ok(r.related.some((t) => ["string", "tail", "spar"].includes(t)), "related words found: " + r.related);
+  // Same words, different order: the typed order wins.
+  const o = new SearchIndex();
+  o.add({ url: "https://a.test/", title: "x", text: "kite paper and other things" });
+  o.add({ url: "https://b.test/", title: "x", text: "paper kite and other things" });
+  assert.equal(o.search("paper kite").results[0].url, "https://b.test/");
+  // A question that's only question words still searches.
+  assert.ok(parseQuery("what is").terms.length > 0);
+});

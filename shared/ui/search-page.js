@@ -78,7 +78,15 @@ export function renderSearch(root, ctx, url) {
     info.textContent = r.total
       ? `${r.total.toLocaleString()} result${r.total === 1 ? "" : "s"} (${secs} seconds) from ${known} pages Kite has read`
       : `No results in the ${known} pages Kite has read so far.`;
-    for (const res of r.results || []) list.append(result(res));
+    let marked = false;
+    for (const res of r.results || []) {
+      // Pages with only part of the search come after the rest: say so once.
+      if (!marked && res.missing && res.missing.length) {
+        marked = true;
+        list.append(el("li", { className: "ks-partial muted", textContent: page === 1 && !list.childElementCount ? "No page has all of your search yet. Pages with part of it:" : "Pages with only part of your search:" }));
+      }
+      list.append(result(res));
+    }
     drawPager(r.total);
     others(r.total < 5 ? "Kite's crawler hasn't read much about this yet. Try" : "Also search");
   })();
@@ -96,7 +104,8 @@ export function renderSearch(root, ctx, url) {
     });
     const snip = el("p", { className: "ks-snippet" });
     for (const part of res.snippet || []) snip.append(part.hit ? el("b", { textContent: part.text }) : document.createTextNode(part.text));
-    return el("li", { className: "ks-result" }, el("div", { className: "ks-url", textContent: prettyUrl(res.url) }), a, snip);
+    const missing = res.missing && res.missing.length ? el("p", { className: "ks-missing" }, "Missing: ", ...res.missing.map((w, i) => [i ? " " : "", el("s", { textContent: w })]).flat()) : null;
+    return el("li", { className: "ks-result" }, el("div", { className: "ks-url", textContent: prettyUrl(res.url) }), a, snip, missing);
   }
 
   function drawPager(total) {

@@ -146,47 +146,110 @@ export class SearchIndex {
     this.inlinks = new Map(keep);
   }
 
-  // Search. Returns { results: [{ url, title, host, snippet: [{ text, hit }] }], total }.
+  // Search. Results are judged on the whole search, not word by word:
+  //   1. coverage: how much of the search a page has. Words count by how rare
+  //      (telling) they are, so missing "kite" costs more than missing "well".
+  //      Pages with (nearly) all of it come first; pages with only part of it
+  //      come after them, marked with what they're missing.
+  //   2. closeness: the words near each other in the page, and in the order you
+  //      typed them ("paper kite" beats a page with "paper" and "kite" far apart).
+  //   3. related words: words the best matches have in common (a search about
+  //      making kites brings up "string", "tail", "spar"...) lift pages about the
+  //      same thing.
+  //   4. BM25 for each word, title/address/headings, links from other sites.
+  // Returns { results: [{ url, title, host, snippet: [{ text, hit }], missing }], total, complete, related }.
   search(q, { page = 1, perPage = 10 } = {}) {
     const query = typeof q === "string" ? parseQuery(q) : q;
-    const empty = { results: [], total: 0, query: query.text };
+    const empty = { results: [], total: 0, complete: 0, related: [], query: query.text };
     if (!query.terms.length && !query.site) return empty;
     const N = this.docs.size || 1;
     const avg = this.totalLength / N || 1;
-    const scores = new Map(); // id -> { score, matched }
-    for (const t of query.terms) {
-      const list = this.postings.get(t);
-      if (!list) continue;
-      const df = list.length / 2;
-      const idf = Math.log(1 + (N - df + 0.5) / (df + 0.5));
+    const idfOf = (df) => Math.log(1 + (N - df + 0.5) / (df + 0.5));
+    const bm25 = (idf, w, doc) => (idf * (w * (K1 + 1))) / (w + K1 * (1 - B + (B * doc.length) / avg));
+
+    // Each word's weight in the search: its rarity. A word no page has still
+    // counts (nothing matches it fully), at the rarest weight.
+    const qt = query.terms.map((t) => {
+      const list = this.postings.get(t) || [];
+      return { term: t, list, idf: idfOf(list.length / 2) };
+    });
+    const totalIdf = qt.reduce((s, t) => s + t.idf, 0) || 1;
+
+    const cand = new Map(); // id -> { doc, bm: 0, got: Set(term), gotIdf: 0, related: 0 }
+    qt.forEach(({ term, list, idf }) => {
       for (let i = 0; i < list.length; i += 2) {
         const doc = this.docs.get(list[i]);
         if (!doc) continue;
-        const w = list[i + 1];
-        const s = (idf * (w * (K1 + 1))) / (w + K1 * (1 - B + (B * doc.length) / avg));
-        const e = scores.get(doc.id);
-        if (e) {
-          e.score += s;
-          e.matched++;
-        } else scores.set(doc.id, { score: s, matched: 1 });
+        let c = cand.get(doc.id);
+        if (!c) cand.set(doc.id, (c = { doc, bm: 0, got: new Set(), gotIdf: 0, related: 0 }));
+        c.bm += bm25(idf, list[i + 1], doc);
+        c.got.add(term);
+        c.gotIdf += idf;
+      }
+    });
+    // site: alone lists that site's pages.
+    if (!query.terms.length && query.site) for (const d of this.docs.values()) if (siteMatches(d.host, query.site)) cand.set(d.id, { doc: d, bm: 1, got: new Set(), gotIdf: 0, related: 0 });
+
+    // Narrowing: site: and "exact phrases".
+    for (const [id, c] of cand) {
+      if (query.site && !siteMatches(c.doc.host, query.site)) cand.delete(id);
+      else if (query.phrases.length) {
+        const hay = fold(c.doc.title + " " + c.doc.description + " " + c.doc.text);
+        if (!query.phrases.every((p) => hay.includes(p))) cand.delete(id);
       }
     }
-    // site: alone lists that site's pages.
-    if (!query.terms.length && query.site) for (const d of this.docs.values()) if (siteMatches(d.host, query.site)) scores.set(d.id, { score: 1, matched: 0 });
+    const coverageOf = (c) => (query.terms.length ? c.gotIdf / totalIdf : 1);
+    const base = (c) => c.bm * (0.15 + 0.85 * coverageOf(c) ** 2);
 
-    const n = query.terms.length || 1;
-    const ranked = [];
-    for (const [id, e] of scores) {
-      const doc = this.docs.get(id);
-      if (query.site && !siteMatches(doc.host, query.site)) continue;
-      if (query.phrases.length) {
-        const hay = fold(doc.title + " " + doc.description + " " + doc.text);
-        if (!query.phrases.every((p) => hay.includes(p))) continue;
+    // Related words, from the pages that match the whole search best.
+    const related = [];
+    if (query.terms.length && N >= 20) {
+      const best = [...cand.values()].filter((c) => coverageOf(c) >= 0.6).sort((a, b) => base(b) - base(a)).slice(0, 8);
+      if (best.length >= 2) {
+        const pool = new Map(); // term -> { weight, pages }
+        for (const c of best) {
+          for (const pair of c.doc.terms.split(" ")) {
+            const i = pair.lastIndexOf(":");
+            const t = pair.slice(0, i);
+            if (i <= 0 || query.terms.includes(t) || t.length < 3 || /^\d+$/.test(t)) continue;
+            const e = pool.get(t) || { weight: 0, pages: 0 };
+            e.weight += Number(pair.slice(i + 1));
+            e.pages++;
+            pool.set(t, e);
+          }
+        }
+        for (const [t, e] of pool) {
+          const df = (this.postings.get(t) || []).length / 2;
+          if (e.pages < 2 || df > N * 0.25) continue; // in one page only, or in everything
+          related.push({ term: t, score: e.weight * e.pages * idfOf(df) });
+        }
+        related.sort((a, b) => b.score - a.score);
+        related.splice(6);
+        for (const r of related) {
+          const list = this.postings.get(r.term) || [];
+          const idf = idfOf(list.length / 2) * 0.3;
+          for (let i = 0; i < list.length; i += 2) {
+            const c = cand.get(list[i]);
+            if (c) c.related += bm25(idf, list[i + 1], c.doc); // only lifts pages that match the search
+          }
+        }
       }
-      const coverage = e.matched / n;
-      let score = e.score * (0.25 + 0.75 * coverage * coverage);
+    }
+
+    // Closeness and order, read from the page's text, for the most promising pages.
+    const ordered = [...cand.values()].sort((a, b) => base(b) - base(a));
+    const close = new Map();
+    if (query.terms.length > 1) for (const c of ordered.slice(0, 300)) close.set(c.doc.id, closeness(c.doc, query.terms));
+
+    const ranked = [];
+    for (const c of ordered) {
+      const { doc } = c;
+      const coverage = coverageOf(c);
+      let score = base(c) + c.related;
+      const near = close.get(doc.id);
+      if (near) score *= 1 + 0.8 * near.closeness + (near.inOrder ? 0.5 : 0);
       const title = fold(doc.title);
-      if (n > 1 && title.includes(fold(query.text))) score *= 1.5;
+      if (query.terms.length > 1 && title.includes(fold(query.text))) score *= 1.5;
       const hostWords = doc.host.split(/[.-]/);
       if (query.terms.some((t) => hostWords.includes(t))) score *= 1.3;
       const links = this.inlinks.get(doc.url) || 0;
@@ -194,30 +257,43 @@ export class SearchIndex {
       const depth = pathDepth(doc.url);
       if (depth === 0) score *= 1.15;
       else if (depth > 3) score *= 0.92;
-      ranked.push({ doc, score });
+      // Pages with (nearly) all of the search come before pages with part of it.
+      const complete = query.terms.length <= 1 || coverage >= 0.8 || c.got.size === query.terms.length;
+      ranked.push({ doc, score, complete, coverage, missing: query.terms.filter((t) => !c.got.has(t)).map((t) => (query.words && query.words.get(t)) || t) });
     }
-    ranked.sort((a, b) => b.score - a.score);
+    ranked.sort((a, b) => b.complete - a.complete || b.score - a.score);
+    // Pages with only a small part of the search (say, just its most common
+    // word) aren't about it: dropped when other pages cover much more of it.
+    const completeCount = ranked.filter((r) => r.complete).length;
+    const bestCoverage = ranked.reduce((m, r) => Math.max(m, r.coverage), 0);
+    const floor = Math.max(0.3, bestCoverage * 0.5);
+    const kept = query.terms.length >= 2 && ranked.some((r) => r.coverage >= floor) ? ranked.filter((r) => r.complete || r.coverage >= floor) : ranked;
+
     // At most two results per site in a row, so one site can't fill the page.
     const spread = [];
     const later = [];
     const perHost = new Map();
-    for (const r of ranked) {
+    for (const r of kept) {
       const c = perHost.get(r.doc.host) || 0;
-      if (c < 2 || query.site) {
+      if (c < 2 || query.site || !r.complete) {
         perHost.set(r.doc.host, c + 1);
         spread.push(r);
       } else later.push(r);
     }
-    const all = spread.concat(later);
+    // (spread keeps complete results first; site-limited extras go after them)
+    const all = spread.filter((r) => r.complete).concat(later, spread.filter((r) => !r.complete));
     const start = (Math.max(1, page) - 1) * perPage;
     return {
       query: query.text,
       total: all.length,
-      results: all.slice(start, start + perPage).map(({ doc, score }) => ({
+      complete: completeCount,
+      related: related.map((r) => r.term),
+      results: all.slice(start, start + perPage).map(({ doc, score, missing, complete }) => ({
         url: doc.url,
         title: doc.title || doc.url,
         host: doc.host,
         snippet: snippet(doc, query),
+        missing: complete ? [] : missing,
         score: Math.round(score * 100) / 100,
       })),
     };
@@ -305,6 +381,41 @@ export function hostOf(url) {
 
 function siteMatches(host, site) {
   return host === site || host.endsWith("." + site);
+}
+
+// How close together a page has the search's words: the shortest stretch of
+// the page holding all the words it has (1 = side by side), and whether they
+// appear there in the order typed.
+export function closeness(doc, queryTerms) {
+  const want = new Map(queryTerms.map((t, i) => [t, i]));
+  const tokens = terms(doc.title + " . " + doc.description + " . " + doc.text);
+  const hits = [];
+  tokens.forEach((t, pos) => want.has(t) && hits.push([pos, want.get(t)]));
+  const present = new Set(hits.map((h) => h[1])).size;
+  if (present < 2) return { closeness: 0, inOrder: false };
+  let best = Infinity;
+  const count = new Map();
+  let have = 0;
+  for (let l = 0, r = 0; r < hits.length; r++) {
+    const k = hits[r][1];
+    count.set(k, (count.get(k) || 0) + 1);
+    if (count.get(k) === 1) have++;
+    while (have === present) {
+      best = Math.min(best, hits[r][0] - hits[l][0] + 1);
+      const kl = hits[l][1];
+      count.set(kl, count.get(kl) - 1);
+      if (count.get(kl) === 0) have--;
+      l++;
+    }
+  }
+  // The whole search, word after word, somewhere in the page.
+  let inOrder = false;
+  if (present === queryTerms.length) {
+    for (let i = 0; i + queryTerms.length <= tokens.length && !inOrder; i++) {
+      inOrder = queryTerms.every((t, j) => tokens[i + j] === t);
+    }
+  }
+  return { closeness: (present / best) * (present / queryTerms.length), inOrder };
 }
 
 function pathDepth(url) {

@@ -50,13 +50,35 @@ export function urlTerms(url) {
   }
 }
 
+// Words that only shape a question ("how do I", "what is the best way to"):
+// left out of what's searched for, so the content words decide.
+const QUESTION = new Set(
+  ("how what why where when which who whom whose do does did doing can could should would shall may might must " +
+    "i me my mine we us our you your yours please tell show explain find give want need know about some any " +
+    "best way ways good really just get getting there here is are was were be been being am").split(" ")
+);
+
 // What you typed, understood: words, "exact phrases" and site:example.com.
+//   terms   the words searched for (stemmed), in the order typed
+//   words   term -> the word as typed (for "Missing: ..." under a result)
+//   text    the whole search, as typed
+//   prompt  the content words in order (for judging closeness and order)
 export function parseQuery(q) {
   q = String(q || "").slice(0, 300);
   const phrases = [];
   let site = null;
   q = q.replace(/"([^"]+)"/g, (_m, p) => (phrases.push(fold(p).trim()), " " + p + " "));
   q = q.replace(/(?:^|\s)site:(\S+)/gi, (_m, s) => ((site = s.toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/^www\./, "")), " "));
-  const list = [...new Set(terms(q))].slice(0, 10);
-  return { terms: list, phrases, site, text: q.trim() };
+  const typed = words(q).filter((w) => w.length <= 40);
+  let content = typed.filter((w) => !STOP.has(w) && !QUESTION.has(w));
+  if (!content.length) content = typed.filter((w) => !STOP.has(w));
+  if (!content.length) content = typed;
+  const wordsOf = new Map();
+  const list = [];
+  for (const w of content) {
+    const t = stem(w);
+    if (!wordsOf.has(t)) wordsOf.set(t, w);
+    if (!list.includes(t) && list.length < 12) list.push(t);
+  }
+  return { terms: list, words: wordsOf, phrases, site, text: q.trim().replace(/\s+/g, " ") };
 }
