@@ -61,6 +61,65 @@ function defaultPath(url) {
   return p.slice(0, p.lastIndexOf("/"));
 }
 
+// Cookies exported from a real browser, in either common format:
+//  - JSON, as the "Cookie-Editor" and "EditThisCookie" extensions export it
+//    ([{ domain, name, value, path, secure, httpOnly, sameSite, expirationDate, hostOnly }])
+//  - Netscape cookies.txt ("Get cookies.txt LOCALLY" and others; HttpOnly ones
+//    start with #HttpOnly_)
+// Returns [{ name, value, domain, hostOnly, path, secure, httpOnly, sameSite, expires }].
+export function parseCookieExport(text) {
+  text = String(text || "").trim();
+  const out = [];
+  if (text.startsWith("[") || text.startsWith("{")) {
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error("That looks like JSON but isn't valid JSON.");
+    }
+    const list = Array.isArray(data) ? data : Array.isArray(data.cookies) ? data.cookies : [];
+    for (const c of list) {
+      if (!c || typeof c.name !== "string" || typeof c.domain !== "string") continue;
+      const same = String(c.sameSite || "").toLowerCase();
+      out.push({
+        name: c.name,
+        value: String(c.value ?? ""),
+        domain: c.domain.toLowerCase(),
+        hostOnly: c.hostOnly === true || (c.hostOnly === undefined && !c.domain.startsWith(".")),
+        path: typeof c.path === "string" ? c.path : "/",
+        secure: Boolean(c.secure),
+        httpOnly: Boolean(c.httpOnly),
+        sameSite: same === "no_restriction" || same === "none" ? "None" : same === "strict" ? "Strict" : same === "lax" ? "Lax" : "",
+        expires: c.session || !c.expirationDate ? null : Math.round(Number(c.expirationDate) * 1000) || null,
+      });
+    }
+    return out;
+  }
+  for (let line of text.split(/\r?\n/)) {
+    let httpOnly = false;
+    if (line.startsWith("#HttpOnly_")) {
+      httpOnly = true;
+      line = line.slice(10);
+    }
+    if (!line.trim() || line.startsWith("#")) continue;
+    const f = line.split("\t");
+    if (f.length < 7) continue;
+    const [domain, sub, path, secure, expiry, name, ...rest] = f;
+    out.push({
+      name,
+      value: rest.join("\t"),
+      domain: domain.toLowerCase(),
+      hostOnly: sub.toUpperCase() !== "TRUE",
+      path: path || "/",
+      secure: secure.toUpperCase() === "TRUE",
+      httpOnly,
+      sameSite: "",
+      expires: Number(expiry) > 0 ? Number(expiry) * 1000 : null,
+    });
+  }
+  return out;
+}
+
 export class CookieJar {
   constructor() {
     this.cookies = new Map(); // "domain;path;name" -> cookie
@@ -191,6 +250,25 @@ export class CookieJar {
   clear(site) {
     if (!site) return this.cookies.clear();
     for (const [key, c] of this.cookies) if (siteOf(c.domain) === site) this.cookies.delete(key);
+  }
+
+  // Add cookies exported from a real browser (see parseCookieExport). Each is
+  // checked like a Set-Cookie header from its own site, HttpOnly allowed.
+  // Returns how many were added.
+  import(list) {
+    let added = 0;
+    for (const c of list) {
+      const attrs = [`${c.name}=${c.value}`, `Path=${c.path || "/"}`];
+      if (!c.hostOnly) attrs.push(`Domain=${c.domain}`);
+      if (c.secure) attrs.push("Secure");
+      if (c.httpOnly) attrs.push("HttpOnly");
+      if (c.sameSite) attrs.push(`SameSite=${c.sameSite}`);
+      if (c.expires) attrs.push(`Expires=${new Date(c.expires).toUTCString()}`);
+      const host = c.domain.replace(/^\./, "");
+      if (!host || (!c.hostOnly && isPublicSuffix(host))) continue; // a cookie for all of .com is no one's
+      if (this.set(attrs.join("; "), `${c.secure ? "https" : "http"}://${host}${c.path || "/"}`)) added++;
+    }
+    return added;
   }
 
   toJSON() {

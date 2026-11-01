@@ -70,3 +70,7 @@ body { display: flex; flex-direction: column; }
 #cookie-list li { display: flex; align-items: center; gap: 10px; padding: 5px 0; border-bottom: 1px solid #2a2f39; }
 #cookie-list li .site { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #cookie-list li .count { color: var(--muted); font-size: 13px; }
+#cookie-import { margin-top: 8px; }
+#cookie-import p { margin: 0 0 6px; line-height: 1.4; }
+#cookie-import textarea { width: 100%; box-sizing: border-box; background: var(--tab); color: var(--text); border: 1px solid #3a414e; border-radius: 6px; padding: 6px; font: 12px ui-monospace, monospace; }
+#cookie-import .import-row { display: flex; align-items: center; gap: 10px; margin-top: 6px; flex-wrap: wrap; }

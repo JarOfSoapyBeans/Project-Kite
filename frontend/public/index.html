@@ -26,7 +26,22 @@
         <div class="panel-head">
           <strong>Cookies</strong>
           <span class="muted">Kept on your Kite backend, never in this browser.</span>
+          <button type="button" id="cookies-import-open">Import&hellip;</button>
           <button type="button" id="cookies-clear-all">Clear all</button>
+        </div>
+        <div id="cookie-import" hidden>
+          <p class="muted">
+            Sign in to a site in Kite by bringing its cookies from your normal browser. There, install a
+            cookie export extension (for example <em>Cookie-Editor</em>), open the site while signed in
+            (e.g. youtube.com), export its cookies as JSON (or a cookies.txt file), then paste or choose
+            the file here. Treat an export like a password: anyone with it is signed in as you.
+          </p>
+          <textarea id="cookie-import-text" rows="5" spellcheck="false" placeholder="Paste exported cookies (JSON or cookies.txt)"></textarea>
+          <div class="import-row">
+            <input type="file" id="cookie-import-file" accept=".json,.txt,application/json,text/plain" />
+            <button type="button" id="cookie-import-go">Import</button>
+            <span id="cookie-import-result" class="muted"></span>
+          </div>
         </div>
         <ul id="cookie-list"></ul>
       </div>

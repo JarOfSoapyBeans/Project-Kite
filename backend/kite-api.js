@@ -6,6 +6,7 @@
 //                                  in the backend's window (KITE_PAGE_LOG=0 turns off)
 //   GET  /__kite/cookies           which sites you have cookies for   (Kite UI only)
 //   POST /__kite/cookies/clear     forget cookies (all, or one site)  (Kite UI only)
+//   POST /__kite/cookies/import    add cookies exported from a browser (Kite UI only)
 //   GET  /__kite/ticket            a pass for loading pages in tabs   (Kite UI only)
 //
 // Proxied pages all live on the backend's address, so the cookie manager only
@@ -13,6 +14,7 @@
 // a page Kite is showing.
 
 import { sourcePage } from "./proxy.js";
+import { parseCookieExport } from "./cookies.js";
 
 export const KITE_PREFIX = "/__kite/";
 
@@ -126,7 +128,8 @@ export async function handleKiteApi(req, res, { sessions, allowedOrigins = [] })
   }
 
   // The cookie manager: only for the Kite UI.
-  if (pathname === "/__kite/cookies" || pathname === "/__kite/cookies/clear" || pathname === "/__kite/ticket") {
+  if (pathname === "/__kite/cookies" || pathname === "/__kite/cookies/clear" || pathname === "/__kite/cookies/import" ||
+    pathname === "/__kite/ticket") {
     const origin = req.headers.origin;
     let fromUi = false;
     try {
@@ -138,6 +141,21 @@ export async function handleKiteApi(req, res, { sessions, allowedOrigins = [] })
     const jar = sessions.jarFor(req, res);
     if (pathname === "/__kite/ticket") {
       return send(res, 200, JSON.stringify({ ticket: sessions.issueTicket() }), { ...cors, "content-type": "application/json" }), true;
+    }
+    if (pathname === "/__kite/cookies/import") {
+      if (req.method !== "POST") return send(res, 405, "", cors), true;
+      const body = await readBody(req, 2 * 1024 * 1024);
+      let list;
+      try {
+        list = parseCookieExport(body);
+      } catch (err) {
+        return send(res, 400, JSON.stringify({ error: err.message }), { ...cors, "content-type": "application/json" }), true;
+      }
+      const imported = jar.import(list.slice(0, 5000));
+      sessions.changed();
+      console.log(`[info] imported ${imported} of ${list.length} cookies`);
+      return send(res, 200, JSON.stringify({ imported, found: list.length, sites: jar.summary() }),
+        { ...cors, "content-type": "application/json" }), true;
     }
     if (pathname === "/__kite/cookies/clear") {
       if (req.method !== "POST") return send(res, 405, "", cors), true;

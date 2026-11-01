@@ -294,6 +294,37 @@ document.getElementById("cookies").addEventListener("click", () => {
   cookiePanel.hidden = !cookiePanel.hidden;
   if (!cookiePanel.hidden) updateCookies();
 });
+// Import cookies exported from your normal browser (to be signed in inside Kite).
+const importBox = document.getElementById("cookie-import");
+const importText = document.getElementById("cookie-import-text");
+const importResult = document.getElementById("cookie-import-result");
+document.getElementById("cookies-import-open").addEventListener("click", () => {
+  importBox.hidden = !importBox.hidden;
+});
+document.getElementById("cookie-import-file").addEventListener("change", async (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (file) importText.value = await file.text();
+});
+document.getElementById("cookie-import-go").addEventListener("click", async () => {
+  const text = importText.value.trim();
+  if (!text) return (importResult.textContent = "Paste cookies or choose a file first.");
+  importResult.textContent = "Importing...";
+  try {
+    const r = await fetch(backend() + "/__kite/cookies/import", {
+      method: "POST",
+      credentials: "include",
+      headers: { "content-type": "text/plain" },
+      body: text,
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `backend answered ${r.status}`);
+    importText.value = ""; // don't leave sign-in cookies lying around on screen
+    importResult.textContent = `Imported ${data.imported} of ${data.found} cookies. Reload the site's tab to use them.`;
+    renderCookies(data.sites);
+  } catch (err) {
+    importResult.textContent = `Couldn't import: ${err.message}`;
+  }
+});
 document.getElementById("cookies-clear-all").addEventListener("click", () => {
   if (confirm("Clear all cookies? You'll be signed out of every site.")) updateCookies("cookies/clear", { site: "" });
 });
