@@ -42,5 +42,6 @@ server.listen(PORT, () => {
   console.log(`Kite backend on :${PORT}  (pages: ${PREFIX}, websockets: ${WS_PREFIX}, health: /health)`);
   console.log(`Allowed origins: ${allowedOrigins.length ? allowedOrigins.join(", ") : "ANY"}`);
   if (process.env.KITE_JS_REWRITE === "0") console.log("Script rewriting (Stage 5): OFF (KITE_JS_REWRITE=0)");
+  if (process.env.KITE_CLIENT_OFF) console.log(`Kite's page script, parts OFF for testing: ${process.env.KITE_CLIENT_OFF}`);
   console.log(`Cookies: ${process.env.COOKIE_FILE ? `saved to ${process.env.COOKIE_FILE}` : "in memory (set COOKIE_FILE to keep them across restarts)"}`);
 });

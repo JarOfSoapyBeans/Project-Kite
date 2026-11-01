@@ -226,6 +226,27 @@ function rewriteSrcset(value, base) {
 
 const ATTR_RE = /([^\s"'<>\/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
 const URL_ATTRS = new Set(["href", "src", "action", "formaction", "poster", "background", "cite", "longdesc", "manifest", "icon"]);
+// For finding which part of Kite's in-page script a site trips over:
+// KITE_CLIENT_OFF=frames,parent (any of these) switches parts off.
+export const CLIENT_PARTS = {
+  native: "make Kite's replaced functions look like the browser's own",
+  parent: "make the tab look like the top window (window.parent)",
+  frames: "patch same-origin child frames (iframes) as they appear",
+  address: "document.URL, referrer, domain, origin, link parts show the real site",
+  function: "rewrite code built at run time (new Function, setTimeout strings)",
+  dom: "rewrite scripts and patch frames as they're inserted (appendChild...)",
+  elements: "send URLs set on elements (img.src...) through Kite",
+  navigation: "keep page-started navigations in Kite (Navigation API)",
+  history: "keep pushState/replaceState addresses in Kite",
+  cookies: "document.cookie from Kite's cookie jar",
+  reflect: "Reflect.get/set for location and top",
+  diagnostics: "send page errors to the backend window",
+};
+const CLIENT_OFF = {};
+for (const name of String((typeof process !== "undefined" && process.env.KITE_CLIENT_OFF) || "").split(",")) {
+  if (CLIENT_PARTS[name.trim()]) CLIENT_OFF[name.trim()] = true;
+}
+
 const DROP_META = new Set(["content-security-policy", "content-security-policy-report-only", "x-frame-options"]);
 
 function rewriteTag(name, attrStr, state) {
@@ -304,7 +325,7 @@ export function rewriteHtml(html, pageUrl, { allowedOrigins = [], scriptCookies 
   const json = (v) => JSON.stringify(v).replace(/</g, "\\u003c");
   const inject =
     `<script data-kite>(${kiteClient.toString()})(${json(pageUrl)},${json(allowedOrigins)},${json(scriptCookies)},` +
-    `${JS_REWRITE_ON ? kiteRenamer.toString() : "null"});</script>`;
+    `${JS_REWRITE_ON ? kiteRenamer.toString() : "null"},${json(CLIENT_OFF)});</script>`;
   const head = /<head\b[^>]*>/i.exec(out);
   const at = head ? head.index + head[0].length : /^\s*(?:<!doctype[^>]*>)?/i.exec(out)[0].length;
   return out.slice(0, at) + inject + out.slice(at);
@@ -326,7 +347,8 @@ export function rewriteHtml(html, pageUrl, { allowedOrigins = [], scriptCookies 
 //    to be the top window
 // It also tells the Kite UI the real URL and title, and lets the UI's
 // back/forward/reload buttons control the tab.
-function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
+function kiteClient(realUrl, origins, initialCookies, makeRenamer, off) {
+  off = off || {}; // parts switched off for testing (KITE_CLIENT_OFF, see CLIENT_PARTS)
   if (window.__kite) return;
   Object.defineProperty(window, "__kite", { value: true }); // not enumerable: pages don't see it
 
@@ -393,7 +415,7 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
       Object.defineProperty(fp, "toString", { value: kiteToString, writable: true, configurable: true, enumerable: false });
     } catch (e) {}
   }
-  patchToString(window);
+  if (!off.native) patchToString(window);
   // Where Kite replaces browser functions; noted now, compared at the end.
   var watched = [];
   (function () {
@@ -661,7 +683,7 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
       win.Object.defineProperty(win, "__kite$k", { configurable: true, writable: true, value: kiteKey });
       win.Object.defineProperty(win, "__kite$rw", { configurable: true, writable: true, value: kiteRewrite });
     } catch (e) {}
-    if (win !== window) patchToString(win);
+    if (win !== window && !off.native) patchToString(win);
     win.Object.defineProperty(OP, "__kite$top", {
       configurable: true,
       get: function () {
@@ -674,12 +696,12 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
   installAccessors(window);
 
   // The tab is the top window as far as the page can tell.
-  if (isTab) {
+  if (isTab && !off.parent) {
     try { Object.defineProperty(window, "parent", { configurable: true, get: function () { return window; } }); } catch (e) {}
   }
 
   // Same-origin child frames (about:blank sandboxes and the like) get the accessors too.
-  ["HTMLIFrameElement", "HTMLFrameElement", "HTMLObjectElement"].forEach(function (name) {
+  if (!off.frames) ["HTMLIFrameElement", "HTMLFrameElement", "HTMLObjectElement"].forEach(function (name) {
     var C = window[name];
     if (!C) return;
     ["contentWindow", "contentDocument"].forEach(function (prop) {
@@ -714,6 +736,7 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
       set: d.set,
     });
   }
+  if (!off.address) {
   docGetter(Document.prototype, "URL", function () { return currentUrl().href; });
   docGetter(Document.prototype, "documentURI", function () { return currentUrl().href; });
   docGetter(Document.prototype, "referrer", function (g) {
@@ -762,6 +785,7 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
       });
     });
   });
+  } // off.address
 
   // Code that pages build while running gets the same rewriting as their scripts.
   var renamer = makeRenamer ? makeRenamer() : null;
@@ -784,6 +808,7 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
     return OrigFunction.apply(this, args);
   };
   KiteFunction.prototype = OrigFunction.prototype;
+  if (!off.function) {
   try {
     Object.defineProperty(OrigFunction.prototype, "constructor", { value: KiteFunction, configurable: true, writable: true });
     window.Function = KiteFunction;
@@ -796,6 +821,7 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
       return orig.apply(window, args);
     };
   });
+  } // off.function
   // <script> elements whose code is set from JavaScript, rewritten as they're inserted.
   function fixScript(node) {
     try {
@@ -814,12 +840,14 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
   // A same-origin iframe gets Kite's patches the moment it's in the page, before
   // the page can borrow fresh copies of browser functions from it.
   function fixFrames(node) {
+    if (off.frames) return;
     try {
       if (!node || node.nodeType !== 1 && node.nodeType !== 11) return;
       var frames = node.tagName === "IFRAME" ? [node] : node.firstElementChild ? node.querySelectorAll("iframe") : [];
       for (var i = 0; i < frames.length; i++) void frames[i].contentWindow; // the hooked getter patches it
     } catch (e) {}
   }
+  if (!off.dom) {
   ["appendChild", "insertBefore", "replaceChild"].forEach(function (name) {
     var orig = Node.prototype[name];
     Node.prototype[name] = function (node) {
@@ -840,6 +868,7 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
       return result;
     };
   });
+  } // off.dom
 
   // ---------- network requests ----------
 
@@ -954,9 +983,11 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
     ["HTMLAnchorElement", "href"], ["HTMLAreaElement", "href"], ["HTMLFormElement", "action"],
     ["HTMLInputElement", "src"], ["HTMLInputElement", "formAction"], ["HTMLButtonElement", "formAction"],
     ["HTMLTrackElement", "src"], ["HTMLVideoElement", "poster"],
-  ].forEach(function (p) { hook(window[p[0]], p[1], wrap); });
-  hook(window.HTMLImageElement, "srcset", wrapSrcset);
-  hook(window.HTMLSourceElement, "srcset", wrapSrcset);
+  ].forEach(function (p) { if (!off.elements) hook(window[p[0]], p[1], wrap); });
+  if (!off.elements) {
+    hook(window.HTMLImageElement, "srcset", wrapSrcset);
+    hook(window.HTMLSourceElement, "srcset", wrapSrcset);
+  }
 
   var URL_ATTRS = { src: 1, href: 1, action: 1, formaction: 1, poster: 1, data: 1, srcset: 2, imagesrcset: 2 };
   function fixAttr(el, name, value) {
@@ -965,10 +996,10 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
     if (name === "data" && el.tagName !== "OBJECT") return value;
     return kind === 2 ? wrapSrcset(value) : wrap(value);
   }
-  Element.prototype.setAttribute = function (name, value) {
+  if (!off.elements) Element.prototype.setAttribute = function (name, value) {
     return origSetAttribute.call(this, name, fixAttr(this, String(name).toLowerCase(), value));
   };
-  Element.prototype.getAttribute = function (name) {
+  if (!off.elements) Element.prototype.getAttribute = function (name) {
     var v = origGetAttribute.call(this, name);
     var n = String(name).toLowerCase();
     if (v !== null && URL_ATTRS[n] === 1 && this.namespaceURI === "http://www.w3.org/1999/xhtml") return unwrap(v);
@@ -986,7 +1017,7 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
       if (nv !== v) origSetAttribute.call(el, name, nv);
     }
   }
-  new MutationObserver(function (records) {
+  if (!off.elements) new MutationObserver(function (records) {
     for (var i = 0; i < records.length; i++) {
       var nodes = records[i].addedNodes;
       for (var j = 0; j < nodes.length; j++) {
@@ -1047,7 +1078,7 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
   // Anything else that would leave the tab's Kite address: location.href = "...",
   // location.assign("/results?..."), form.submit() to another site...
   // (Navigation API; Chromium-based browsers.)
-  if (window.navigation && window.navigation.addEventListener) {
+  if (!off.navigation && window.navigation && window.navigation.addEventListener) {
     window.navigation.addEventListener("navigate", function (e) {
       if (!e.cancelable || e.downloadRequest || e.hashChange || e.navigationType === "traverse") return;
       var dest;
@@ -1108,9 +1139,9 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
       });
     } catch (e) {}
   }
-  patchHistory(window);
+  if (!off.history) patchHistory(window);
   // navigation.navigate("/watch?v=...") (Navigation API) goes to the Kite address.
-  try {
+  if (!off.history) try {
     var NavProto = window.Navigation && Navigation.prototype;
     if (NavProto && NavProto.navigate) {
       var origNavigate = NavProto.navigate;
@@ -1151,7 +1182,7 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
     if (header === null || header === undefined) return;
     try { cookieView = parseCookies(decodeURIComponent(header)); } catch (e) {}
   }
-  try {
+  if (!off.cookies) try {
     Object.defineProperty(document, "cookie", {
       configurable: true,
       get: function () {
@@ -1224,19 +1255,19 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
       return lines.length ? "\n" + lines.join("\n") : "";
     } catch (e) { return ""; }
   }
-  window.addEventListener("error", function (e) {
+  if (!off.diagnostics) window.addEventListener("error", function (e) {
     if (!e || typeof e.message !== "string") return; // a failed image etc., not a script error
     var where = e.filename ? " (" + e.filename + ":" + e.lineno + ":" + e.colno + ")" : "";
     var stack = e.error && e.error.stack ? "\n" + String(e.error.stack).split("\n").slice(1, 6).join("\n") : "";
     kiteLog("error", e.message + where + stack);
   });
-  window.addEventListener("unhandledrejection", function (e) {
+  if (!off.diagnostics) window.addEventListener("unhandledrejection", function (e) {
     var r = e && e.reason;
     kiteLog("error", "unhandled promise rejection: " + (r && r.stack ? String(r.stack).split("\n").slice(0, 6).join("\n") : String(r)));
   });
 
   // Reflect.get(window, "location") is the same lookup as window["location"].
-  ["get", "set"].forEach(function (name) {
+  if (!off.reflect) ["get", "set"].forEach(function (name) {
     var orig = Reflect[name];
     Reflect[name] = function (target, key) {
       var args = Array.prototype.slice.call(arguments);
@@ -1302,7 +1333,7 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer) {
     post({ kite: 1, type: "find", active: found ? findState.active : 0, total: t });
   }
 
-  disguise(); // last: every replaced browser function now reports the original's text
+  if (!off.native) disguise(); // last: every replaced browser function now reports the original's text
 }
 
 // Runs at the start of every Web Worker a proxied page starts (Stage 5). Workers
