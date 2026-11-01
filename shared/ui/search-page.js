@@ -59,25 +59,53 @@ export function renderSearch(root, ctx, url) {
   }
 
   info.textContent = "Searching…";
-  (async () => {
+  const token = root.__kiteView;
+  const alive = () => root.__kiteView === token && root.isConnected;
+  const looking = el("p", { className: "ks-looking", hidden: true });
+  info.after(looking);
+
+  // When Kite has little about the whole search, KiteBot goes to read pages
+  // about it; the results are asked for again a few times as they arrive.
+  const AGAIN = [5000, 12000, 25000, 45000];
+  let tries = 0;
+  let shown = -1; // how many complete results are on screen
+
+  async function load() {
     let r;
     try {
       r = await ctx.search(q, page);
     } catch (err) {
-      info.textContent = `Kite Search couldn't answer: ${err.message}`;
-      others("Search with");
+      if (shown < 0) {
+        info.textContent = `Kite Search couldn't answer: ${err.message}`;
+        others("Search with");
+      }
       return;
     }
+    if (!alive()) return;
     if (r.error) {
-      info.textContent = r.error;
-      others("Search with");
+      if (shown < 0) {
+        info.textContent = r.error;
+        others("Search with");
+      }
       return;
     }
+    const complete = Number(r.complete) || 0;
+    if (complete !== shown || shown < 0) draw(r);
+    shown = complete;
+    const keepLooking = (r.discovering || tries > 0) && tries < AGAIN.length && complete < 3;
+    looking.hidden = !keepLooking;
+    looking.textContent = keepLooking ? `KiteBot is reading pages about “${q}” now. Results will appear here as it finds them.` : "";
+    if (keepLooking) setTimeout(() => alive() && load(), AGAIN[tries++]);
+  }
+
+  function draw(r) {
     const secs = ((r.took || 0) / 1000).toFixed(2);
     const known = Number(r.pages || 0).toLocaleString();
     info.textContent = r.total
       ? `${r.total.toLocaleString()} result${r.total === 1 ? "" : "s"} (${secs} seconds) from ${known} pages Kite has read`
       : `No results in the ${known} pages Kite has read so far.`;
+    list.textContent = "";
+    pager.textContent = "";
     let marked = false;
     for (const res of r.results || []) {
       // Pages with only part of the search come after the rest: say so once.
@@ -89,7 +117,8 @@ export function renderSearch(root, ctx, url) {
     }
     drawPager(r.total);
     others(r.total < 5 ? "Kite's crawler hasn't read much about this yet. Try" : "Also search");
-  })();
+  }
+  load();
 
   function result(res) {
     const a = el("a", { className: "ks-title", href: /^https?:\/\//i.test(res.url) ? res.url : "#", textContent: res.title || res.url });

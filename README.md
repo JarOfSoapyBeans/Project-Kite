@@ -292,6 +292,14 @@ It runs on your Kite backend (`backend/search/`, no dependencies):
   1.5 s apart, a few sites at once, up to 1000 pages per site, only public
   addresses, only web pages (up to 2 MB), with no cookies. It reads pages again
   after a week and drops pages that are gone.
+- **When a search has little about it** (fewer than 3 pages with the whole
+  search), KiteBot goes to find pages about it straight away (`discover.js`).
+  From the search itself it works out where they're likely to be: for "how to
+  play guitar", wikiHow's *Play-Guitar*, Wikipedia's *Guitar* and Wikibooks'
+  *Guitar* (no other search engine is asked). It reads those before anything
+  else, then the links on them about the same thing (two links deep). The
+  results page says KiteBot is looking and updates itself as pages arrive. Each
+  search is looked for at most once every half hour.
 - **The index** (`index.js`) keeps each page's strongest words, its title,
   description and the start of its text (for snippets), and is saved to
   `.kite-search.ndjson` next to `start_home.bat` (git-ignored), together with

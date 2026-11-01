@@ -12,15 +12,20 @@
 import path from "node:path";
 import { SearchIndex } from "./index.js";
 import { Crawler, DEFAULT_SEEDS, normalizeUrl } from "./crawler.js";
+import { topicUrls } from "./discover.js";
+import { parseQuery } from "./text.js";
 
 export class SearchEngine {
-  constructor({ file = null, maxPages = 20000, seeds = DEFAULT_SEEDS, crawl = true, learn = false, crawlerOptions = {} } = {}) {
+  constructor({ file = null, maxPages = 20000, seeds = DEFAULT_SEEDS, crawl = true, learn = false, crawlerOptions = {}, findTopicUrls = topicUrls } = {}) {
+    this.findTopicUrls = findTopicUrls; // (tests use their own)
     this.index = new SearchIndex({ file, maxPages });
     this.crawler = new Crawler({ index: this.index, seeds, queueFile: file ? file + ".queue" : null, ...crawlerOptions });
     this.crawl = crawl;
     this.learn = learn;
     this.learned = new Set();
     this.searches = 0;
+    this.discovered = new Map(); // search -> when KiteBot went looking for it
+    this.discoveries = []; // times, for the limit
     this.saveTimer = null;
   }
 
@@ -55,11 +60,38 @@ export class SearchEngine {
     }
   }
 
-  search(q, opts) {
+  search(q, opts = {}) {
     this.searches++;
     const started = process.hrtime.bigint();
     const r = this.index.search(q, opts);
-    return { ...r, took: Number(process.hrtime.bigint() - started) / 1e6, pages: this.index.size };
+    const took = Number(process.hrtime.bigint() - started) / 1e6;
+    // Little or nothing about the whole search: KiteBot goes to find pages about it.
+    const discovering = (opts.page || 1) === 1 && r.complete < 3 ? this.discover(q) : false;
+    return { ...r, took, pages: this.index.size, discovering };
+  }
+
+  // Send KiteBot to pages likely to be about this search (search/discover.js),
+  // and have it follow their links about it. At most once per search per half
+  // hour, and 20 searches a minute in all. Returns true while it's looking.
+  discover(q) {
+    if (!this.crawl || !this.crawler.running) return false;
+    const key = String(q).toLowerCase().replace(/\s+/g, " ").trim().slice(0, 200);
+    const now = Date.now();
+    const last = this.discovered.get(key);
+    if (last && now - last < 30 * 60_000) return now - last < 60_000; // still looking for the first minute
+    this.discoveries = this.discoveries.filter((t) => now - t < 60_000);
+    if (this.discoveries.length >= 20) return false;
+    const query = parseQuery(q);
+    if (!query.terms.length) return false;
+    const urls = this.findTopicUrls(q);
+    let added = 0;
+    for (const u of urls) if (this.crawler.add(u, 1, { force: true, urgent: true, hops: 2 })) added++;
+    this.crawler.addTopic(query.terms);
+    this.discoveries.push(now);
+    this.discovered.set(key, now);
+    if (this.discovered.size > 5000) this.discovered.delete(this.discovered.keys().next().value);
+    console.log(`[search] looking for pages about "${key}" (${added} to read first)`);
+    return true;
   }
 
   // Someone opened a page through Kite: maybe read that site's home page.

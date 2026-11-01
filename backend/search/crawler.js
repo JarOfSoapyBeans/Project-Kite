@@ -16,6 +16,7 @@ import { checkTarget, guardedLookup } from "../proxy.js";
 import { extract } from "./extract.js";
 import { parseRobots, allowed, BOT_NAME } from "./robots.js";
 import { hostOf } from "./index.js";
+import { terms } from "./text.js";
 
 export const USER_AGENT = `Mozilla/5.0 (compatible; ${BOT_NAME}/1.0; +https://github.com/JarOfSoapyBeans/Project-Kite)`;
 export const DEFAULT_SEEDS = [
@@ -55,7 +56,9 @@ export function normalizeUrl(input, base) {
 export class Crawler {
   constructor({ index, seeds = DEFAULT_SEEDS, queueFile = null, concurrency = 4, hostDelayMs = 1500, maxPerHost = 1000, maxDepth = 6, recrawlDays = 7, allowPrivate = false, allowedPorts = [80, 443, 8080, 8443], log = console.log } = {}) {
     Object.assign(this, { index, seeds, queueFile, concurrency, hostDelayMs, maxPerHost, maxDepth, recrawlDays, allowPrivate, allowedPorts, log });
-    this.queues = new Map(); // host -> [{ url, depth }]
+    this.queues = new Map(); // host -> [{ url, depth, urgent?, hops? }]
+    this.urgentHosts = new Set(); // sites with pages waiting for a search
+    this.topics = []; // [{ terms, until }]: what searches are waiting for
     this.queued = 0;
     this.seen = new Set(); // addresses queued or read since starting
     this.hosts = new Map(); // host -> { ready, robots, robotsAt, pages }
@@ -71,7 +74,10 @@ export class Crawler {
 
   // ---------- the queue ----------
 
-  add(url, depth = 0, { force = false } = {}) {
+  // force: read it even if it was read recently. urgent: read it before
+  // everything else (pages for a search that's waiting); hops: how many more
+  // links about the search to follow from it.
+  add(url, depth = 0, { force = false, urgent = false, hops = 0 } = {}) {
     const u = normalizeUrl(url);
     if (!u || (!force && this.seen.has(u))) return false;
     if (this.queued >= MAX_QUEUE) return false;
@@ -85,8 +91,15 @@ export class Crawler {
     if (this.seen.size > 2_000_000) this.seen.clear();
     let q = this.queues.get(host);
     if (!q) this.queues.set(host, (q = []));
-    if (force) q.unshift({ url: u, depth });
-    else q.push({ url: u, depth });
+    const item = { url: u, depth, ...(urgent ? { urgent: true, hops } : {}) };
+    if (urgent) {
+      // After the other urgent ones on this site, before the rest.
+      let i = 0;
+      while (i < q.length && q[i].urgent) i++;
+      q.splice(i, 0, item);
+      this.urgentHosts.add(host);
+    } else if (force) q.unshift(item);
+    else q.push(item);
     this.queued++;
     if (!doc) h.pages++;
     return true;
@@ -137,34 +150,71 @@ export class Crawler {
     this.paused = on;
   }
 
+  // Searches waiting for pages about them: KiteBot follows links about these.
+  addTopic(topicTerms, ms = 10 * 60_000) {
+    const list = [...new Set(topicTerms)].filter(Boolean);
+    if (!list.length) return;
+    const now = Date.now();
+    this.topics = this.topics.filter((t) => t.until > now && t.terms.join() !== list.join()).slice(-20);
+    this.topics.push({ terms: list, until: now + ms });
+  }
+
+  // Is this link about one of the waiting searches? (half its words, at least one)
+  #onTopic(link) {
+    if (!this.topics.length) return false;
+    const now = Date.now();
+    let path = "";
+    try {
+      path = decodeURIComponent(new URL(link.url).pathname).replace(/[-_/.]+/g, " ");
+    } catch {}
+    const have = new Set(terms(link.text + " " + path));
+    return this.topics.some((t) => t.until > now && t.terms.filter((w) => have.has(w)).length >= Math.max(1, Math.ceil(t.terms.length / 2)));
+  }
+
   #tick() {
     if (!this.running || this.paused) return;
     const now = Date.now();
+    // Pages a search is waiting for go first, with two extra places.
+    for (const host of [...this.urgentHosts]) {
+      const q = this.queues.get(host);
+      if (!q || !q.length || !q[0].urgent) {
+        this.urgentHosts.delete(host);
+        continue;
+      }
+      if (this.active >= this.concurrency + 2) break;
+      this.#start(host, q, now);
+    }
     for (const [host, q] of this.queues) {
       if (this.active >= this.concurrency) return;
-      const h = this.#host(host);
       if (!q.length) {
         this.queues.delete(host);
         continue;
       }
-      if (h.ready > now || h.busy) continue;
-      const item = q.shift();
-      this.queued--;
-      h.busy = true;
-      this.active++;
-      this.crawl(item)
-        .catch(() => {})
-        .finally(() => {
-          h.busy = false;
-          h.ready = Date.now() + Math.max(this.hostDelayMs, (h.robots && h.robots.delay ? h.robots.delay * 1000 : 0));
-          this.active--;
-        });
+      if (!this.#start(host, q, now)) continue;
       // Round-robin: next time start from the site after this one.
       this.queues.delete(host);
       if (q.length) this.queues.set(host, q);
     }
     // Nothing left to read: read again the pages that are oldest.
     if (!this.queued && !this.active) this.#recrawl();
+  }
+
+  // Read the next page of one site, if the site is ready. Returns false if not.
+  #start(host, q, now) {
+    const h = this.#host(host);
+    if (h.ready > now || h.busy || !q.length) return false;
+    const item = q.shift();
+    this.queued--;
+    h.busy = true;
+    this.active++;
+    this.crawl(item)
+      .catch(() => {})
+      .finally(() => {
+        h.busy = false;
+        h.ready = Date.now() + Math.max(this.hostDelayMs, (h.robots && h.robots.delay ? h.robots.delay * 1000 : 0));
+        this.active--;
+      });
+    return true;
   }
 
   #recrawl() {
@@ -193,7 +243,8 @@ export class Crawler {
     return robots;
   }
 
-  async crawl({ url, depth }) {
+  async crawl({ url, depth, urgent = false, hops = 0 }) {
+    const urgentHops = urgent ? hops : 0;
     const started = Date.now();
     const note = (result, extra = {}) => {
       this.recent.push({ url, result, time: Date.now(), ms: Date.now() - started, ...extra });
@@ -219,7 +270,7 @@ export class Crawler {
         if (!next) return note("redirect to something else");
         // Another site: queue it there (its own robots.txt and pace).
         if (hostOf(next) !== hostOf(current)) {
-          this.add(next, depth);
+          this.add(next, depth, urgent ? { urgent, hops, force: true } : {});
           return note("redirect", { to: next });
         }
         current = next;
@@ -240,7 +291,12 @@ export class Crawler {
     const page = extract(decode(r.body, r.type), current);
     const tag = String(r.robotsTag || "").toLowerCase();
     const follow = () => {
-      if (!page.nofollow && !/nofollow|none/.test(tag) && depth < this.maxDepth) for (const l of page.links) this.add(l.url, depth + 1);
+      if (page.nofollow || /nofollow|none/.test(tag)) return;
+      for (const l of page.links) {
+        // Links about a waiting search, from a page read for it: read them next.
+        if (urgentHops > 0 && this.#onTopic(l)) this.add(l.url, depth + 1, { urgent: true, hops: urgentHops - 1 });
+        else if (depth < this.maxDepth) this.add(l.url, depth + 1);
+      }
     };
     // "noindex": not in the results, but its links may still be followed.
     if (page.noindex || /noindex|none/.test(tag)) {

@@ -213,3 +213,50 @@ test("whole searches: question words dropped, pages with all of it first, close 
   // A question that's only question words still searches.
   assert.ok(parseQuery("what is").terms.length > 0);
 });
+
+test("where to look for a search: the subject, on Wikipedia, wikiHow, Wikibooks", async () => {
+  const { topicUrls, subjectOf } = await import("../search/discover.js");
+  assert.equal(subjectOf("How do I make a paper kite that flies well?").subject, "make a paper kite");
+  assert.deepEqual(topicUrls("how to play guitar"), ["https://www.wikihow.com/Play-Guitar", "https://en.wikipedia.org/wiki/Guitar", "https://en.wikibooks.org/wiki/Guitar"]);
+  assert.equal(topicUrls("what is photosynthesis")[0], "https://en.wikipedia.org/wiki/Photosynthesis");
+  assert.equal(topicUrls("how can I fix a flat tire on my bike")[0], "https://www.wikihow.com/Fix-a-Flat-Tire-on-a-Bike");
+  assert.deepEqual(topicUrls(""), []);
+});
+
+test("a search with nothing good: KiteBot reads pages about it first, and their links about it", async () => {
+  const read = [];
+  const lesson = http.createServer((req, res) => {
+    read.push(req.url);
+    if (req.url === "/robots.txt") return res.writeHead(404).end();
+    const pages = {
+      "/Play-Guitar": `<title>How to Play Guitar</title><p>Learn to play guitar: hold it, tune it, strum.</p><a href="/Guitar-Chords">Beginner guitar chords</a> <a href="/Cooking">Cooking</a> <a href="/Tune-a-Guitar">Tune a guitar</a>`,
+      "/Guitar-Chords": `<title>Guitar Chords for Beginners</title><p>Play these guitar chords first: G, C, D.</p><a href="/Strumming-Guitar-Patterns">Guitar strumming</a>`,
+      "/Tune-a-Guitar": `<title>How to Tune a Guitar</title><p>Tune each string of your guitar.</p>`,
+      "/Strumming-Guitar-Patterns": `<title>Strumming patterns</title><p>Play guitar strumming patterns.</p>`,
+      "/Cooking": `<title>Cooking</title><p>Pasta.</p>`,
+    };
+    if (!pages[req.url]) return res.writeHead(404).end();
+    res.writeHead(200, { "content-type": "text/html" });
+    res.end(pages[req.url]);
+  });
+  await new Promise((r) => lesson.listen(0, "127.0.0.1", r));
+  const at = `http://127.0.0.1:${lesson.address().port}`;
+  const engine = new SearchEngine({ seeds: [], findTopicUrls: () => [at + "/Play-Guitar"], crawlerOptions: { allowPrivate: true, allowedPorts: null, hostDelayMs: 0 } });
+  engine.index.add({ url: "https://music.test/guitar", title: "Guitar", text: "The guitar is a string instrument." });
+  engine.start();
+  try {
+    const first = engine.search("how to play guitar");
+    assert.equal(first.discovering, true, "nothing about the whole search: KiteBot goes looking");
+    assert.equal(first.results[0].title, "Guitar");
+    for (let i = 0; i < 80 && !engine.index.has(at + "/Strumming-Guitar-Patterns"); i++) await new Promise((r) => setTimeout(r, 50));
+    const next = engine.search("how to play guitar");
+    assert.equal(next.results[0].title, "How to Play Guitar", JSON.stringify(next.results.map((r) => r.title)));
+    assert.ok(next.results.slice(0, 4).some((r) => r.title === "Guitar Chords for Beginners"));
+    const pagesRead = read.filter((u) => u !== "/robots.txt");
+    assert.ok(pagesRead.indexOf("/Guitar-Chords") < pagesRead.indexOf("/Cooking") || !pagesRead.includes("/Cooking"), "links about the search first: " + pagesRead);
+    assert.equal(engine.search("how to play guitar").discovering, false, "looked once; doesn't keep looking");
+  } finally {
+    engine.stop();
+    lesson.close();
+  }
+});

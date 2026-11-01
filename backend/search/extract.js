@@ -78,6 +78,7 @@ export function extract(html, pageUrl) {
 
   const text = clean(body.replace(/<(nav|footer|header|aside|form)\b[\s\S]*?<\/\1\s*>/gi, " ").replace(/<\/(p|div|li|h\d|tr|br|section|article)>/gi, " . "))
     .replace(/(\s\.)+/g, " .")
+    .replace(/([.!?:;,])\s\./g, "$1")
     .replace(/^[\s.]+/, "");
   const lang = (/<html\b[^>]*\slang\s*=\s*["']?([a-z]{2,3})/i.exec(html) || [])[1] || null;
 

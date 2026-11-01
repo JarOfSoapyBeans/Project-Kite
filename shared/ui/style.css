@@ -258,3 +258,5 @@ body { display: flex; flex-direction: column; }
 .ks-missing { margin: 3px 0 0; font-size: 13px; color: var(--muted); }
 .ks-missing s { color: #9aa0a6; }
 .ks-partial { padding: 14px 4px 2px; font-size: 13px; border-top: 1px solid #2a2f39; margin-top: 6px; }
+.ks-looking { margin: 4px 4px 6px; padding: 8px 12px; border-radius: 8px; background: #1d2a3f; color: #b8d0f5; font-size: 13px; }
+.ks-looking::before { content: "\25CC  "; color: var(--accent); }
