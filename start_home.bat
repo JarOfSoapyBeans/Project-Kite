@@ -19,7 +19,7 @@ rem Where your Kite frontend runs, comma-separated, no slash at the end.
 rem http://localhost:3000 is the frontend started by this file.
 rem Add your Vercel address later, e.g.
 rem   set ALLOWED_ORIGINS=http://localhost:3000,https://kite-xyz.vercel.app
-set ALLOWED_ORIGINS=http://localhost:3000
+set ALLOWED_ORIGINS=http://localhost:3000,https://kite.cat-code.org
 
 rem 1 = also start the frontend on http://localhost:3000 and open it.
 rem 0 = don't (e.g. once your frontend is on Vercel).
