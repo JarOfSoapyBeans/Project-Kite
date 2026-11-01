@@ -9,6 +9,7 @@ import https from "node:https";
 import dns from "node:dns";
 import net from "node:net";
 import zlib from "node:zlib";
+import crypto from "node:crypto";
 import { promisify } from "node:util";
 import { requestContext } from "./cookies.js";
 import { kiteRenamer, rewriteJs, JS_REWRITE_ON } from "./jsrewrite.js";
@@ -30,6 +31,8 @@ const gunzip = promisify(zlib.gunzip);
 const inflate = promisify(zlib.inflate);
 const inflateRaw = promisify(zlib.inflateRaw);
 const brotli = promisify(zlib.brotliDecompress);
+const gzip = promisify(zlib.gzip);
+const brotliCompress = promisify(zlib.brotliCompress);
 
 // ---------- URL encoding ----------
 
@@ -1585,14 +1588,39 @@ function readLimited(stream, limit) {
   });
 }
 
-async function decodeBody(buf, encoding) {
+async function decodeBody(buf, encoding, limit = MAX_BODY) {
   const e = String(encoding || "").toLowerCase().trim();
-  const opts = { maxOutputLength: MAX_BODY * 2 };
+  const opts = { maxOutputLength: limit * 2 };
   if (!e || e === "identity") return buf;
   if (e === "gzip" || e === "x-gzip") return gunzip(buf, opts);
   if (e === "br") return brotli(buf, opts);
   if (e === "deflate") return inflate(buf, opts).catch(() => inflateRaw(buf, opts));
   throw new Error(`unsupported content-encoding "${e}"`);
+}
+
+// Brotli (fast setting) if the browser takes it, else gzip; small bodies as they are.
+const compressedCache = new Map(); // sha1 of big scripts -> { br, gzip }, the same scripts come again and again
+let compressedBytes = 0;
+async function compressFor(req, body) {
+  if (body.length < 1024) return null;
+  const accept = String(req.headers["accept-encoding"] || "");
+  const name = /\bbr\b/.test(accept) ? "br" : /\bgzip\b/.test(accept) ? "gzip" : null;
+  if (!name) return null;
+  const key = body.length > 256 * 1024 ? crypto.createHash("sha1").update(body).digest("base64") + name : null;
+  if (key && compressedCache.has(key)) return { name, body: compressedCache.get(key) };
+  const out = name === "br"
+    ? await brotliCompress(body, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5, [zlib.constants.BROTLI_PARAM_SIZE_HINT]: body.length } })
+    : await gzip(body, { level: 6 });
+  if (key) {
+    compressedCache.set(key, out);
+    compressedBytes += out.length;
+    for (const [k, v] of compressedCache) {
+      if (compressedBytes <= 32 * 1024 * 1024) break;
+      compressedCache.delete(k);
+      compressedBytes -= v.length;
+    }
+  }
+  return { name, body: out };
 }
 
 function decodeText(buf, contentType, isHtml) {
@@ -1749,7 +1777,7 @@ export async function handleProxy(req, res, options = {}) {
     }
 
     const raw = await readLimited(up, isScript ? MAX_SCRIPT : MAX_BODY);
-    const text = decodeText(await decodeBody(raw, up.headers["content-encoding"]), type, isHtml);
+    const text = decodeText(await decodeBody(raw, up.headers["content-encoding"], isScript ? MAX_SCRIPT : MAX_BODY), type, isHtml);
     let out;
     if (isHtml) {
       out = rewriteHtml(text, target, { allowedOrigins: o.allowedOrigins, scriptCookies: o.jar ? o.jar.scriptCookies(target) : "" });
@@ -1761,9 +1789,17 @@ export async function handleProxy(req, res, options = {}) {
     } else {
       out = rewriteCss(text, target);
     }
-    const body = Buffer.from(out, "utf8");
+    let body = Buffer.from(out, "utf8");
     for (const h of ["content-encoding", "content-length", "etag", "last-modified", "accept-ranges", "content-range"]) {
       delete headers[h];
+    }
+    // Compressed again for the trip to the browser (through a home connection's
+    // upload, a 3 MB script is about 0.7 MB this way).
+    const encoding = await compressFor(req, body);
+    if (encoding) {
+      body = encoding.body;
+      headers["content-encoding"] = encoding.name;
+      headers.vary = headers.vary ? headers.vary + ", Accept-Encoding" : "Accept-Encoding";
     }
     headers["content-type"] = `${isHtml ? "text/html" : isScript ? type.split(";")[0].trim() : "text/css"}; charset=utf-8`;
     headers["cache-control"] = "no-cache, no-transform";

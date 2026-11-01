@@ -14,6 +14,7 @@ const { JsonStore } = require("./store.js");
 const NAMES = ["history", "bookmarks", "shortcuts", "settings"];
 const EVERY_MS = 2 * 60 * 1000;
 const AFTER_CHANGE_MS = 5000;
+const AFTER_HISTORY_MS = 30_000; // history changes with every page: send it less often
 
 class Sync {
   // read(profileId, name) / write(profileId, name, value): the profile's local data.
@@ -95,10 +96,15 @@ class Sync {
     if (!store.data.token || !NAMES.includes(name)) return;
     store.data.dirty[name] = true;
     store.changed();
-    clearTimeout(this.running.get("soon:" + profileId));
-    const t = setTimeout(() => this.syncNow(profileId), AFTER_CHANGE_MS);
+    // A sooner sync already planned stays; history alone waits a little longer.
+    const key = "soon:" + profileId;
+    const delay = name === "history" ? AFTER_HISTORY_MS : AFTER_CHANGE_MS;
+    const planned = this.running.get(key);
+    if (planned && planned.at <= Date.now() + delay) return;
+    if (planned) clearTimeout(planned.timer);
+    const t = setTimeout(() => (this.running.delete(key), this.syncNow(profileId)), delay);
     if (t.unref) t.unref();
-    this.running.set("soon:" + profileId, t);
+    this.running.set(key, { timer: t, at: Date.now() + delay });
   }
 
   start(profileId) {
@@ -121,11 +127,14 @@ class Sync {
     const c = store.data;
     if (!c.token) return this.status(profileId);
     try {
-      const remote = await this.#api(c, "GET", "/__kite/data");
+      // First just the versions; only what changed is downloaded.
+      const versions = await this.#api(c, "GET", "/__kite/data/versions");
       for (const name of NAMES) {
-        const r = remote[name];
         const seen = c.versions[name] || 0;
         const local = c.dirty[name] ? this.read(profileId, name) : null;
+        // The account's copy is only downloaded when it changed and we'll use it.
+        const changed = (versions[name] || 0) > seen;
+        const r = changed && local === null ? await this.#api(c, "GET", "/__kite/data/" + name) : null;
         if (local !== null) {
           // We changed it: send it (merged by the backend if the account changed too).
           const sent = await this.#api(c, "PUT", "/__kite/data/" + name, { value: local, base: seen });

@@ -52,20 +52,49 @@ export function createWebData(backend) {
     return remote;
   }
 
-  // Other devices' changes: look every minute while signed in.
+  // Other devices' changes: ask "what changed?" every minute while signed in
+  // (just version numbers), then fetch only what did.
   function poll() {
     clearInterval(pollTimer);
     if (!user) return;
     pollTimer = setInterval(async () => {
-      const all = await fetchRemote();
-      for (const [name, v] of Object.entries(all)) {
-        if (v.updated > (versions[name] || 0)) {
+      let now;
+      try {
+        now = await api("/__kite/data/versions");
+      } catch {
+        return;
+      }
+      for (const [name, updated] of Object.entries(now)) {
+        if (updated <= (versions[name] || 0) || pending.has(name)) continue;
+        try {
+          const v = await api("/__kite/data/" + name);
           versions[name] = v.updated;
           if (listener) listener(name, v.value);
-        }
+        } catch {}
       }
     }, 60_000);
   }
+
+  // History changes with every page; it's sent at most every 20 seconds (and
+  // when you leave Kite Web), not after each visit.
+  const pending = new Map(); // name -> latest value not sent yet
+  let historyTimer = null;
+  async function send(name, value) {
+    pending.delete(name);
+    try {
+      const r = await api("/__kite/data/" + name, { method: "PUT", body: JSON.stringify({ value, base: versions[name] || 0 }) });
+      versions[name] = r.updated;
+      // Another device changed it meanwhile: the merged result comes back.
+      if ("value" in r && listener) listener(name, r.value);
+    } catch {}
+  }
+  function flush() {
+    clearTimeout(historyTimer);
+    historyTimer = null;
+    for (const [name, value] of pending) send(name, value);
+  }
+  window.addEventListener("pagehide", flush);
+  document.addEventListener("visibilitychange", () => document.visibilityState === "hidden" && flush());
 
   return {
     async load(name) {
@@ -85,12 +114,9 @@ export function createWebData(backend) {
 
     async save(name, value) {
       if (!ACCOUNT.has(name) || !user) return local.set(name, value);
-      try {
-        const r = await api("/__kite/data/" + name, { method: "PUT", body: JSON.stringify({ value, base: versions[name] || 0 }) });
-        versions[name] = r.updated;
-        // Another device changed it meanwhile: the merged result comes back.
-        if ("value" in r && listener) listener(name, r.value);
-      } catch {}
+      if (name !== "history") return send(name, value);
+      pending.set(name, value);
+      if (!historyTimer) historyTimer = setTimeout(flush, 20_000);
     },
 
     onChange(fn) {
@@ -107,6 +133,7 @@ export function createWebData(backend) {
     // Signed in or out: everything comes from the new place.
     async accountChanged(next) {
       if ((next || null) === user) return;
+      flush(); // anything not sent yet goes to the account it belongs to
       user = next || null;
       remote = null;
       for (const k of Object.keys(versions)) delete versions[k];

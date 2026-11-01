@@ -60,6 +60,13 @@ export function putData(account, name, value, base) {
   return { updated, value, merged };
 }
 
+// Just the version of each kind: cheap to ask for often ("has anything changed?").
+export function getVersions(account) {
+  const out = {};
+  for (const name of ACCOUNT_DATA) if (account.data && account.data[name]) out[name] = account.data[name].updated;
+  return out;
+}
+
 export function getData(account) {
   const out = {};
   for (const name of ACCOUNT_DATA) if (account.data && account.data[name]) out[name] = account.data[name];

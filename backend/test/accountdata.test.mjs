@@ -91,6 +91,9 @@ test("linking the Kite app: one-time code, token, sync, unlink", async () => {
   // Kite Web adds a visit without having seen the app's: both are kept
   const web = await b("PUT", "/__kite/data/history", { value: [{ url: "https://from.web/", time: 9 }], base: 0 });
   assert.deepEqual(web.body.value.map((v) => v.url), ["https://from.web/", "https://from.app/"]);
+  const versions = (await a("GET", "/__kite/data/versions")).body;
+  assert.deepEqual(Object.keys(versions), ["history"]);
+  assert.equal(typeof versions.history, "number");
   const dev = (await b("GET", "/__kite/sync/devices")).body.devices;
   assert.equal(dev.length, 1);
   assert.equal(dev[0].device, "Kite app on Desktop");

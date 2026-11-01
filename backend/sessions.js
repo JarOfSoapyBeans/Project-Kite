@@ -210,13 +210,47 @@ export class Sessions {
     if (!this.file || this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
-      this.save();
+      this.saveInBackground();
     }, 2000);
     this.saveTimer.unref();
   }
 
+  // Saving while Kite keeps serving pages: the file is written without blocking.
+  // Changes made meanwhile are saved right after.
+  saveInBackground() {
+    if (!this.file) return;
+    if (this.writing) {
+      this.saveAgain = true;
+      return;
+    }
+    this.writing = true;
+    const tmp = this.file + ".tmp";
+    fs.promises
+      .writeFile(tmp, this.#serialize(), { mode: 0o600 })
+      .then(() => fs.promises.rename(tmp, this.file))
+      .catch((err) => console.warn(`[warn] could not save cookies to ${this.file}: ${err.message}`))
+      .finally(() => {
+        this.writing = false;
+        if (this.saveAgain) {
+          this.saveAgain = false;
+          this.changed();
+        }
+      });
+  }
+
+  // Saving right now (when Kite stops).
   save() {
     if (!this.file) return;
+    const tmp = this.file + ".tmp";
+    try {
+      fs.writeFileSync(tmp, this.#serialize(), { mode: 0o600 });
+      fs.renameSync(tmp, this.file);
+    } catch (err) {
+      console.warn(`[warn] could not save cookies to ${this.file}: ${err.message}`);
+    }
+  }
+
+  #serialize() {
     const data = { sessions: {}, accounts: {} };
     for (const [id, s] of this.map) {
       data.sessions[id] = s.user ? { lastUsed: s.lastUsed, user: s.user } : { lastUsed: s.lastUsed, cookies: s.jar.toJSON() };
@@ -227,13 +261,7 @@ export class Sessions {
         ? { google: a.google, email: a.email, created: a.created, cookies: a.jar.toJSON(), ...extra }
         : { salt: a.salt, hash: a.hash, created: a.created, cookies: a.jar.toJSON(), ...extra };
     }
-    const tmp = this.file + ".tmp";
-    try {
-      fs.writeFileSync(tmp, JSON.stringify(data), { mode: 0o600 });
-      fs.renameSync(tmp, this.file);
-    } catch (err) {
-      console.warn(`[warn] could not save cookies to ${this.file}: ${err.message}`);
-    }
+    return JSON.stringify(data);
   }
 
   #load() {

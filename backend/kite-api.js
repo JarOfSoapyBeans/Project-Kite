@@ -15,6 +15,7 @@
 //   POST /__kite/account/google    collect a finished Google sign-in  (Kite UI only)
 //   GET  /__kite/google/start, /__kite/google/callback   the Google sign-in popup (google.js)
 //   GET  /__kite/data              your account's history, bookmarks, shortcuts, settings
+//   GET  /__kite/data/versions     just their versions (for "has anything changed?")
 //   PUT  /__kite/data/<name>       save one of them ({ value, base })     (signed-in Kite UI,
 //                                  or a linked Kite app with its token)
 //   POST /__kite/sync/link-code    a one-time code to link the Kite app  (signed-in Kite UI)
@@ -30,7 +31,7 @@
 import { sourcePage } from "./proxy.js";
 import { parseCookieExport, siteOf } from "./cookies.js";
 import { googleConfig, handleGoogle, takeGoogleResult } from "./google.js";
-import { ACCOUNT_DATA, putData, getData, newLinkCode, useLinkCode, newToken, devices, unlink, resetLinkCodes, hashToken } from "./accountdata.js";
+import { ACCOUNT_DATA, putData, getData, getVersions, newLinkCode, useLinkCode, newToken, devices, unlink, resetLinkCodes, hashToken } from "./accountdata.js";
 
 const GOOGLE = googleConfig();
 
@@ -165,6 +166,7 @@ const SIGNUP_ON = process.env.KITE_SIGNUP !== "0";
 async function dataEndpoint(req, res, pathname, account, sessions, cors) {
   const json = (status, value) => send(res, status, JSON.stringify(value), { ...cors, "content-type": "application/json" });
   if (pathname === "/__kite/data") return json(200, getData(account));
+  if (pathname === "/__kite/data/versions") return json(200, getVersions(account));
   const name = pathname.slice("/__kite/data/".length);
   if (!ACCOUNT_DATA.has(name)) return json(404, { error: "unknown data" });
   if (req.method === "GET") return json(200, (account.data && account.data[name]) || { value: null, updated: 0 });
