@@ -1027,6 +1027,7 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer, off) {
         var n = nodes[j];
         if (n.nodeType !== 1) continue;
         if (n.matches(SELECTOR)) fixElement(n);
+        if (!n.firstElementChild) continue; // nothing inside: no need to search it
         var inner = n.querySelectorAll(SELECTOR);
         for (var k = 0; k < inner.length; k++) fixElement(inner[k]);
       }
