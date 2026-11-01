@@ -39,12 +39,18 @@ function updateAddress() {
   if (activeTab && document.activeElement !== addressEl) addressEl.value = displayUrl(activeTab.url);
 }
 
+function focusAddress() {
+  if (platform.focusUi) platform.focusUi(); // in the app, a page may have the keyboard
+  addressEl.focus();
+  addressEl.select();
+}
+
 function selectTab(tab) {
   activeTab = tab;
   platform.showView(tab.id);
   tabs.forEach(renderTab);
   updateAddress();
-  if (!tab.url) addressEl.focus();
+  if (!tab.url) focusAddress();
 }
 
 function createTab(input) {
@@ -74,9 +80,13 @@ function createTab(input) {
   return tab;
 }
 
+const closed = []; // recently closed pages, for Ctrl+Shift+T
+
 function closeTab(tab) {
   const index = tabs.indexOf(tab);
   if (index < 0) return;
+  if (tab.url) closed.push(tab.url);
+  if (closed.length > 25) closed.shift();
   tabs.splice(index, 1);
   platform.closeView(tab.id);
   tab.tabEl.remove();
@@ -130,6 +140,15 @@ platform.start({
     createTab(url);
   },
   status: showStatus,
+  // A key pressed inside a page (the app forwards browser shortcuts).
+  shortcut(name) {
+    if (SHORTCUTS[name]) SHORTCUTS[name]();
+  },
+  // The new tab page's search box, in the app.
+  navigateRequest(id, input) {
+    const tab = tabById(id);
+    if (tab) navigate(input, tab);
+  },
   // Something (e.g. signing in or out) means every open page should be loaded again.
   reloadAll,
 });
@@ -154,30 +173,39 @@ document.getElementById("reload").addEventListener("click", () => activeTab && p
 const popout = document.getElementById("popout");
 if (popout) popout.addEventListener("click", () => activeTab && activeTab.url && platform.popout(activeTab.id, activeTab.url));
 
-// Keyboard shortcuts, like other browsers.
-document.addEventListener("keydown", (e) => {
+// Keyboard shortcuts, like other browsers. In the app they work wherever the
+// keyboard is (main.js forwards them from pages); on Kite Web, while Kite's
+// toolbar has the keyboard (the browser keeps Ctrl+T and Ctrl+W for itself).
+const SHORTCUTS = {
+  "new-tab": () => createTab(),
+  "close-tab": () => activeTab && closeTab(activeTab),
+  "reopen-tab": () => closed.length && createTab(closed.pop()),
+  "focus-address": () => focusAddress(),
+  "next-tab": () => tabs.length && selectTab(tabs[(tabs.indexOf(activeTab) + 1) % tabs.length]),
+  "prev-tab": () => tabs.length && selectTab(tabs[(tabs.indexOf(activeTab) + tabs.length - 1) % tabs.length]),
+  reload: () => activeTab && platform.command(activeTab.id, "reload"),
+  back: () => activeTab && platform.command(activeTab.id, "back"),
+  forward: () => activeTab && platform.command(activeTab.id, "forward"),
+};
+function shortcutFor(e) {
   const mod = e.ctrlKey || e.metaKey;
-  if (mod && e.key.toLowerCase() === "t") {
-    e.preventDefault();
-    createTab();
-  } else if (mod && e.key.toLowerCase() === "w") {
-    e.preventDefault();
-    if (activeTab) closeTab(activeTab);
-  } else if (mod && e.key.toLowerCase() === "l") {
-    e.preventDefault();
-    addressEl.focus();
-  } else if (mod && e.key === "Tab") {
-    e.preventDefault();
-    const i = tabs.indexOf(activeTab);
-    selectTab(tabs[(i + (e.shiftKey ? tabs.length - 1 : 1)) % tabs.length]);
-  } else if ((mod && e.key.toLowerCase() === "r") || e.key === "F5") {
-    e.preventDefault();
-    if (activeTab) platform.command(activeTab.id, "reload");
-  } else if (e.altKey && e.key === "ArrowLeft") {
-    if (activeTab) platform.command(activeTab.id, "back");
-  } else if (e.altKey && e.key === "ArrowRight") {
-    if (activeTab) platform.command(activeTab.id, "forward");
-  }
+  const key = e.key.toLowerCase();
+  if (mod && e.shiftKey && key === "tab") return "prev-tab";
+  if (mod && key === "tab") return "next-tab";
+  if (mod && e.shiftKey && key === "t") return "reopen-tab";
+  if (mod && key === "t") return "new-tab";
+  if (mod && key === "w") return "close-tab";
+  if (mod && key === "l") return "focus-address";
+  if ((mod && key === "r") || key === "f5") return "reload";
+  if (e.altKey && key === "arrowleft") return "back";
+  if (e.altKey && key === "arrowright") return "forward";
+  return null;
+}
+document.addEventListener("keydown", (e) => {
+  const name = shortcutFor(e);
+  if (!name) return;
+  e.preventDefault();
+  SHORTCUTS[name]();
 });
 
 // The new tab page's search box.

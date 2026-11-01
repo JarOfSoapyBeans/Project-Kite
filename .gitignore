@@ -11,3 +11,8 @@ frontend/dist/
 
 # Your private settings for start_home.bat (Google client secret, ...)
 kite-secrets.bat
+
+# Built by `npm run build-ui` in /desktop (from /shared), and app builds
+desktop/app-ui/
+desktop/dist/
+desktop/out/

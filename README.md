@@ -30,14 +30,28 @@ shared/            the browser interface and logic, written once
   platform/        how tabs work where Kite runs:
     web.js           Kite Web: each tab is an iframe through the backend
     web-panels.js    Kite Web only: accounts, cookie jar, backend address
-    desktop.js       the Kite app (Stage 7 part 2)
+    desktop.js       the Kite app: each tab is a real Chromium view
 frontend/          Kite Web: `npm run build` assembles shared/ into frontend/dist
 backend/           the proxy that powers Kite Web
-desktop/           the Kite app (Stage 7 part 2)
+desktop/           the Kite app (Electron): main.js, preload.js, view-preload.js
 ```
 
-From the repo folder: `npm test` runs the shared and backend tests, `npm run web`
+From the repo folder: `npm test` runs the shared, backend and app tests, `npm run web`
 builds and serves Kite Web on http://localhost:3000.
+
+### Run the Kite app
+
+Double-click `start_desktop.bat` (Windows), or from the repo folder:
+
+```bash
+npm install --workspace desktop   # first time: downloads Electron
+npm run desktop
+```
+
+Each tab is a real Chromium page: sites load directly, as in Chrome or Edge, with
+no backend and no rewriting. Your sites' logins and storage are kept in the app's
+own profile. Sites get no camera, microphone, location or notifications yet (Kite
+will ask you, in Stage 7 part 3). F12 opens DevTools for the current page.
 
 ## Try it in GitHub Codespaces
 

@@ -3,10 +3,16 @@
   "version": "0.3.0",
   "private": true,
   "description": "Kite: a browser app (desktop), with Kite Web, a web version that works like it.",
-  "workspaces": ["shared", "frontend", "backend"],
+  "workspaces": [
+    "shared",
+    "frontend",
+    "backend",
+    "desktop"
+  ],
   "scripts": {
+    "desktop": "npm start --workspace desktop",
     "web": "npm run dev --workspace frontend",
     "backend": "npm start --workspace backend",
-    "test": "npm test --workspace shared && npm test --workspace backend"
+    "test": "npm test --workspace shared && npm test --workspace backend && npm test --workspace desktop"
   }
 }

@@ -30,7 +30,8 @@
       document.getElementById("f").addEventListener("submit", (e) => {
         e.preventDefault();
         const value = document.getElementById("q").value;
-        if (window.parent && window.parent.browserNavigate) window.parent.browserNavigate(value);
+        if (window.kiteNewTab) window.kiteNewTab.navigate(value); // the Kite app
+        else if (window.parent && window.parent.browserNavigate) window.parent.browserNavigate(value); // Kite Web
       });
     </script>
   </body>

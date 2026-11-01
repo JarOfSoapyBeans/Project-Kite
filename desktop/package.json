@@ -1,0 +1,16 @@
+{
+  "name": "kite-desktop",
+  "productName": "Kite",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Kite, the browser app: real Chromium tabs (Electron) with Kite's shared interface.",
+  "main": "main.js",
+  "scripts": {
+    "build-ui": "node scripts/build-ui.mjs",
+    "start": "node scripts/build-ui.mjs && electron .",
+    "test": "node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "electron": "latest"
+  }
+}
