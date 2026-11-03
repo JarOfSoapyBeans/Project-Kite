@@ -5,6 +5,7 @@
 // Kite UI which page is showing.
 
 import http from "node:http";
+import { youtubeSettings, youtubeVideo, videoInfo, videoPage, youtubeNavScript, isYouTubePage } from "./youtube.js";
 import https from "node:https";
 import dns from "node:dns";
 import net from "node:net";
@@ -329,7 +330,8 @@ export function rewriteHtml(html, pageUrl, { allowedOrigins = [], scriptCookies 
   const json = (v) => JSON.stringify(v).replace(/</g, "\\u003c");
   const inject =
     `<script data-kite>(${kiteClient.toString()})(${json(pageUrl)},${json(allowedOrigins)},${json(scriptCookies)},` +
-    `${rewriteSettings.on ? kiteRenamer.toString() : "null"},${json(pageScriptOff)});</script>`;
+    `${rewriteSettings.on ? kiteRenamer.toString() : "null"},${json(pageScriptOff)});</script>` +
+    (youtubeSettings.embed && isYouTubePage(pageUrl) ? youtubeNavScript() : "");
   const head = /<head\b[^>]*>/i.exec(out);
   const at = head ? head.index + head[0].length : /^\s*(?:<!doctype[^>]*>)?/i.exec(out)[0].length;
   return out.slice(0, at) + inject + out.slice(at);
@@ -1641,6 +1643,26 @@ function decodeText(buf, contentType, isHtml) {
   }
 }
 
+async function sendVideoPage(req, res, video, o) {
+  const info = await videoInfo(video.id);
+  // The tab shows the video's watch address (youtu.be/ID becomes watch?v=ID).
+  const pageUrl = new URL(video.url).hostname === "youtu.be"
+    ? `https://www.youtube.com/watch?v=${video.id}${video.list ? "&list=" + video.list : ""}${video.start ? "&t=" + video.start : ""}`
+    : video.url;
+  const html = rewriteHtml(videoPage(video, info), pageUrl, { allowedOrigins: o.allowedOrigins, scriptCookies: o.jar ? o.jar.scriptCookies(pageUrl) : "" });
+  let body = Buffer.from(html, "utf8");
+  const headers = { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache, no-transform", "x-kite-source": "kite" };
+  const encoding = await compressFor(req, body);
+  if (encoding) {
+    body = encoding.body;
+    headers["content-encoding"] = encoding.name;
+    headers.vary = "Accept-Encoding";
+  }
+  headers["content-length"] = body.length;
+  res.writeHead(200, headers);
+  res.end(body);
+}
+
 function sendError(res, status, message) {
   if (res.headersSent) return res.destroy();
   res.setHeader("x-kite-source", "kite"); // visible to the server's error log
@@ -1712,6 +1734,13 @@ export async function handleProxy(req, res, options = {}) {
       const t = new URL(target);
       t.search = search;
       target = t.href;
+    }
+
+    // A YouTube video opened in a tab: Kite's page with YouTube's embedded
+    // player instead of the full watch page (see youtube.js).
+    if (youtubeSettings.embed && req.method === "GET" && /^(iframe|frame|document)$/.test(String(req.headers["sec-fetch-dest"] || ""))) {
+      const video = youtubeVideo(target);
+      if (video) return sendVideoPage(req, res, video, o);
     }
 
     // A tab's first load comes from the Kite UI, on another origin. If the site

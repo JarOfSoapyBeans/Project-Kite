@@ -290,10 +290,16 @@ To update later: `git pull`, then restart `start_home.bat`. Your cookies stay in
 ### Known limits of Kite Web
 
 Most sites work, including live updates over WebSockets and staying signed in.
-YouTube is the hardest: its anti-bot check (BotGuard) can tell it isn't really on
-youtube.com, so videos may stop after about a minute, and in some browsers the
-watch page crashes when shown inside a frame (it plays when opened on its own,
-with the pop-out button). Some sign-in pages (notably Google's) refuse to work
+YouTube is the hardest: its full watch page can crash inside a frame in some
+browsers, and its anti-bot check (BotGuard) can tell it isn't really on
+youtube.com and stop videos after about a minute. So Kite Web plays YouTube
+videos (`watch?v=`, `/shorts/`, `/live/`, `youtu.be` links) on **its own video
+page with YouTube's embedded player**, the one other websites use: it's made to
+run inside frames and plays most videos without BotGuard's token. The tab still
+shows the watch address; "Open the full YouTube page" shows the real one
+(comments, related videos). Clicking a video on YouTube's own pages opens it this
+way too. Switch it off in Kite DevTools → Switches, or `KITE_YOUTUBE_EMBED=0`.
+A few videos can't be embedded (their owners turned that off): those say so. Some sign-in pages (notably Google's) refuse to work
 inside any proxy. The **Kite app** has none of these limits: its tabs are real
 browser pages. For finding problems: `KITE_MEDIA_LOG=1` (video requests),
 `KITE_CLIENT_OFF=...` (switch parts of Kite's page script off) and

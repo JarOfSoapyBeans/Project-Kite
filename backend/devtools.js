@@ -12,6 +12,7 @@
 
 import { rewriteSettings, cacheStats } from "./jsrewrite.js";
 import { pageScriptOff, CLIENT_PARTS, mediaLog, compressedStats } from "./proxy.js";
+import { youtubeSettings } from "./youtube.js";
 
 const MAX_EVENTS = 3000;
 
@@ -100,6 +101,7 @@ export function getSettings() {
   return {
     jsRewrite: rewriteSettings.on,
     mediaLog: mediaLog.on,
+    youtubeEmbed: youtubeSettings.embed,
     clientOff: Object.keys(pageScriptOff).filter((k) => pageScriptOff[k]),
   };
 }
@@ -107,12 +109,13 @@ export function getSettings() {
 export function setSettings(changes = {}) {
   if (typeof changes.jsRewrite === "boolean") rewriteSettings.on = changes.jsRewrite;
   if (typeof changes.mediaLog === "boolean") mediaLog.on = changes.mediaLog;
+  if (typeof changes.youtubeEmbed === "boolean") youtubeSettings.embed = changes.youtubeEmbed;
   if (Array.isArray(changes.clientOff)) {
     for (const k of Object.keys(pageScriptOff)) delete pageScriptOff[k];
     for (const k of changes.clientOff) if (CLIENT_PARTS[k]) pageScriptOff[k] = true;
   }
   const now = getSettings();
-  console.log(`[devtools] settings: script rewriting ${now.jsRewrite ? "on" : "OFF"}, video log ${now.mediaLog ? "on" : "off"}` +
+  console.log(`[devtools] settings: script rewriting ${now.jsRewrite ? "on" : "OFF"}, video log ${now.mediaLog ? "on" : "off"}, YouTube embedded player ${now.youtubeEmbed ? "on" : "off"}` +
     (now.clientOff.length ? `, page-script parts OFF: ${now.clientOff.join(", ")}` : ""));
   return now;
 }

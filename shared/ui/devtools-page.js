@@ -267,7 +267,8 @@ export function renderDevtools(root, ctx) {
       el("div", { className: "settings" },
         section("Backend",
           toggle("Rewrite sites' scripts", "Kite renames location, top… inside scripts so pages see their real address. Off = KITE_JS_REWRITE=0.", s.jsRewrite, (v) => save({ jsRewrite: v })),
-          toggle("Video log", "Log every YouTube video chunk ([video] lines). Same as KITE_MEDIA_LOG=1.", s.mediaLog, (v) => save({ mediaLog: v }))),
+          toggle("Video log", "Log every YouTube video chunk ([video] lines). Same as KITE_MEDIA_LOG=1.", s.mediaLog, (v) => save({ mediaLog: v })),
+          toggle("YouTube: play videos with YouTube's embedded player", "Kite's video page instead of the full watch page, which can crash inside Kite Web or stop after a minute. Off = KITE_YOUTUBE_EMBED=0.", s.youtubeEmbed !== false, (v) => save({ youtubeEmbed: v }))),
         section("Kite's page script (ticked = on)",
           ...Object.entries(parts).map(([k, desc]) =>
             toggle(k, String(desc), !s.clientOff.includes(k), (on) => {
