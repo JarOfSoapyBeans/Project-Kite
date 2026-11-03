@@ -141,21 +141,27 @@ export function youtubeNavScript() {
   function onVideoPage() { return !!document.querySelector('meta[name="kite-video"]'); }
   var going = false;
   function go(to) { if (!going) { going = true; fake.assign(to); } return true; }
+  function idOf(u) {
+    try {
+      var x = new URL(u, fake.href);
+      return x.searchParams.get("v") || (/^\\/(?:shorts|live)\\/([^/?#]+)/.exec(x.pathname) || [])[1] || null;
+    } catch (e) { return null; }
+  }
   // Called by Kite's history patch (every frame's pushState/replaceState) with
-  // the real address: true = Kite took care of it.
+  // the real address: true = Kite took care of it. Only pushState opens a page;
+  // replaceState just tidies the current one (YouTube removes kite_full=1 from
+  // the address that way), and the same video is never a new page.
   Object.defineProperty(window, "__kite$videoNav", { value: function (href, how) {
-    if (onVideoPage()) return false;
+    if (how !== "pushState" || onVideoPage()) return false;
     var to = video(href);
-    if (!to) return false;
-    var now = video(fake.href);
-    if (how === "replaceState" && now && now.split("#")[0] === to.split("#")[0]) return false; // same video, e.g. &t= added
+    if (!to || idOf(to) === idOf(fake.href)) return false;
     return go(to);
   } });
   // YouTube announces its own page changes: a second net.
   document.addEventListener("yt-navigate-start", function (e) {
     var u = e && e.detail && (e.detail.url || (e.detail.endpoint && e.detail.endpoint.commandMetadata && e.detail.endpoint.commandMetadata.webCommandMetadata && e.detail.endpoint.commandMetadata.webCommandMetadata.url));
     var to = u && !onVideoPage() ? video(u) : null;
-    if (to) go(to);
+    if (to && idOf(to) !== idOf(fake.href)) go(to);
   }, true);
 })();</script>`;
 }
