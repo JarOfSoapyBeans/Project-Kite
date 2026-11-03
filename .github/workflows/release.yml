@@ -1,7 +1,8 @@
 # A Kite release. Push a version tag that matches desktop/package.json:
 #     git tag v1.0.0
 #     git push origin v1.0.0
-# Then, on GitHub's machines: the tests run; Windows builds "Kite-Setup-1.0.0.exe"
+# or start it by hand on GitHub (Actions -> Release -> Run workflow), which tags
+# the version in desktop/package.json itself. Then, on GitHub's machines: the tests run; Windows builds "Kite-Setup-1.0.0.exe"
 # and publishes it (with latest.yml, which installed apps read to update
 # themselves) as the GitHub Release v1.0.0; Kite Web's built site is added to
 # the same release as a zip.
@@ -33,6 +34,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Tag this version (when the release is started by hand)
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          v=$(node -p "require('./desktop/package.json').version")
+          git tag "v$v" && git push origin "v$v" || echo "v$v is already tagged"
       - name: Build the app on its own (outside the npm workspace)
         shell: bash
         run: mv package.json package.workspace.json

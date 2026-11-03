@@ -36,6 +36,7 @@ it to point at your Kite backend).
    git tag v1.0.1
    git push origin main v1.0.1
    ```
+   (or, on GitHub: **Actions → Release → Run workflow**, which tags it for you).
 3. GitHub Actions (`.github/workflows/release.yml`) runs the tests, builds
    `Kite-Setup-1.0.1.exe` on Windows, publishes the release with it, and adds
    `Kite-Web-1.0.1.zip`. Installed apps pick it up within 4 hours.
