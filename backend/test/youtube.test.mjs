@@ -38,7 +38,8 @@ test("youtube.com pages get the script that turns in-page video changes into pag
   assert.ok(rewriteHtml(html, "https://www.youtube.com/").includes("yt-navigate-start"));
   assert.ok(!rewriteHtml(html, "https://example.com/").includes("yt-navigate-start"));
   youtubeSettings.embed = false;
-  assert.ok(!rewriteHtml(html, "https://www.youtube.com/").includes("yt-navigate-start"));
+  const off = rewriteHtml(html, "https://www.youtube.com/");
+  assert.ok(off.includes("__kite$skipNavigation") && off.includes("var redirect = false"), "switched off: still skips the dark-mode reload, no redirect");
   youtubeSettings.embed = true;
   assert.ok(youtubeNavScript().includes("kite_full"));
 });

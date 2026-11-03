@@ -128,10 +128,12 @@ export function videoPage(video, info = {}) {
 // video on the home page just swaps the content in), which would show the full
 // watch page after all. A video address pushed that way becomes a real page
 // load, which Kite answers with its video page. Runs after Kite's page script.
-export function youtubeNavScript() {
+// redirect: also turn video changes into Kite's video page (the embedded-player switch).
+export function youtubeNavScript(redirect = true) {
   return `<script data-kite>(function () {
   var fake = window.__kite$fakeLocation;
-  if (!fake || window.__kite$videoNav) return;
+  if (!fake || window.__kite$skipNavigation) return;
+  var redirect = ${redirect ? "true" : "false"};
   function video(u) {
     try {
       var x = new URL(u, fake.href);
@@ -159,15 +161,29 @@ export function youtubeNavScript() {
   // replaceState just tidies the current one (YouTube removes kite_full=1 from
   // the address that way), and the same video is never a new page.
   Object.defineProperty(window, "__kite$videoNav", { value: function (href, how) {
-    if (how !== "pushState" || onVideoPage()) return false;
+    if (!redirect || how !== "pushState" || onVideoPage()) return false;
     var to = video(href);
     if (!to || idOf(to) === idOf(fake.href)) return false;
     return go(to);
   } });
+  // YouTube reloads the whole page (…&themeRefresh=1) when the theme it drew
+  // differs from your system's light/dark setting. Inside Kite's frame that
+  // reload, with the player starting, crashed the page (Edge). The theme is
+  // remembered in a cookie that Kite keeps, so the next page is drawn right
+  // anyway: the reload is skipped.
+  Object.defineProperty(window, "__kite$skipNavigation", { value: function (to, now) {
+    try {
+      var a = new URL(to), b = new URL(now);
+      if (!a.searchParams.has("themeRefresh") || a.pathname !== b.pathname) return null;
+      a.searchParams.delete("themeRefresh");
+      b.searchParams.delete("themeRefresh");
+      return a.searchParams.toString() === b.searchParams.toString() ? "YouTube reloading only to change light/dark theme" : null;
+    } catch (e) { return null; }
+  } });
   // YouTube announces its own page changes: a second net.
   document.addEventListener("yt-navigate-start", function (e) {
     var u = e && e.detail && (e.detail.url || (e.detail.endpoint && e.detail.endpoint.commandMetadata && e.detail.endpoint.commandMetadata.webCommandMetadata && e.detail.endpoint.commandMetadata.webCommandMetadata.url));
-    var to = u && !onVideoPage() ? video(u) : null;
+    var to = u && redirect && !onVideoPage() ? video(u) : null;
     if (to && idOf(to) !== idOf(fake.href)) go(to);
   }, true);
 })();</script>`;

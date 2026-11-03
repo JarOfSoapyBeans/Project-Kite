@@ -331,7 +331,7 @@ export function rewriteHtml(html, pageUrl, { allowedOrigins = [], scriptCookies 
   const inject =
     `<script data-kite>(${kiteClient.toString()})(${json(pageUrl)},${json(allowedOrigins)},${json(scriptCookies)},` +
     `${rewriteSettings.on ? kiteRenamer.toString() : "null"},${json(assetLog.on ? { ...pageScriptOff, _assets: true } : pageScriptOff)});</script>` +
-    (youtubeSettings.embed && isYouTubePage(pageUrl) ? youtubeNavScript() : "");
+    (isYouTubePage(pageUrl) ? youtubeNavScript(youtubeSettings.embed) : "");
   const head = /<head\b[^>]*>/i.exec(out);
   const at = head ? head.index + head[0].length : /^\s*(?:<!doctype[^>]*>)?/i.exec(out)[0].length;
   return out.slice(0, at) + inject + out.slice(at);
@@ -587,6 +587,13 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer, off) {
   function navigateTo(v, replace) {
     var target = wrap(String(v)); // Kite address (or "#hash", "javascript:" unchanged)
     if (String(target).charAt(0) === "#") return replace ? realLocation.replace(target) : realLocation.assign(target);
+    // A site's own rules can say "not this one" (youtube.js: YouTube reloading
+    // itself just to switch to dark mode, which crashed it inside Kite's frame).
+    if (typeof window.__kite$skipNavigation === "function") {
+      var why = null;
+      try { why = window.__kite$skipNavigation(String(unwrap(target)), currentUrl().href); } catch (e) {}
+      if (why) return kiteLog("navigate", "skipped " + unwrap(target) + " (" + why + ")");
+    }
     kiteLog("navigate", (replace ? "replace with " : "go to ") + unwrap(target) + stackHere());
     // Let cookies the page just set reach the backend first, so the next page
     // load sees them (sites like YouTube set a cookie, then reload).
