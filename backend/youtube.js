@@ -151,12 +151,16 @@ export function youtubeNavScript(redirect = true, hideDrm = true) {
   }
   function onVideoPage() { return !!document.querySelector('meta[name="kite-video"]'); }
   var going = false;
-  // Stop the page's players first (see stopMedia in Kite's page script), then go.
+  // Stop the page's players (see stopMedia in Kite's page script), then go, and
+  // stop them again right before leaving: YouTube may start a new player for
+  // the clicked video in between (the tunnel log showed one buffering as the
+  // home page was torn down).
+  function stop(why) { if (window.__kite$stopMedia) window.__kite$stopMedia(why); }
   function go(to) {
     if (going) return true;
     going = true;
-    if (window.__kite$stopMedia) window.__kite$stopMedia("opening a video");
-    setTimeout(function () { fake.assign(to); }, 60);
+    stop("opening a video");
+    setTimeout(function () { stop("leaving for the video"); fake.assign(to); }, 30);
     return true;
   }
   function idOf(u) {
@@ -205,6 +209,18 @@ export function youtubeNavScript(redirect = true, hideDrm = true) {
     if (noDrm) return Promise.reject(new DOMException("Unsupported keySystem or supportedConfigurations.", "NotSupportedError"));
     return askDrm.apply(navigator, arguments);
   };
+  // A click on a link to a video: Kite gets it before YouTube does, so YouTube
+  // never starts playing it inside the page that's about to be left.
+  window.addEventListener("click", function (e) {
+    if (!redirect || e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || onVideoPage()) return;
+    var a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+    if (!a || (a.target && a.target !== "_self")) return;
+    var to = video(a.getAttribute("href"));
+    if (!to || idOf(to) === idOf(fake.href)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    go(to);
+  }, true);
   // YouTube announces its own page changes: a second net.
   document.addEventListener("yt-navigate-start", function (e) {
     var u = e && e.detail && (e.detail.url || (e.detail.endpoint && e.detail.endpoint.commandMetadata && e.detail.endpoint.commandMetadata.webCommandMetadata && e.detail.endpoint.commandMetadata.webCommandMetadata.url));
