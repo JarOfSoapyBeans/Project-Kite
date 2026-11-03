@@ -78,13 +78,13 @@ test("live switches: page-script parts, script rewriting, video log", async () =
   const dev = browser();
   await dev("POST", "/__kite/account/signin", { username: "dev", password: "password123" });
   const s = (await dev("POST", "/__kite/devtools/settings", { clientOff: ["parent", "nonsense"], jsRewrite: false, mediaLog: true })).body;
-  assert.deepEqual(s, { jsRewrite: false, mediaLog: true, youtubeEmbed: true, assetLog: false, clientOff: ["parent"] });
+  assert.deepEqual(s, { jsRewrite: false, mediaLog: true, youtubeEmbed: true, youtubeHideDrm: true, assetLog: false, clientOff: ["parent"] });
   const page = await (await fetch(url + P(siteUrl + "/"), { headers: { "sec-fetch-site": "same-origin" } })).text();
   assert.ok(page.includes(',null,{"parent":true});</script>'), "the page script gets the switches, no renamer");
   const js = await (await fetch(url + P(siteUrl + "/a.js"), { headers: { "sec-fetch-dest": "script", "sec-fetch-site": "same-origin" } })).text();
   assert.equal(js, "window.x = location.href;", "scripts no longer rewritten");
   const back = (await dev("POST", "/__kite/devtools/settings", { clientOff: [], jsRewrite: true, mediaLog: false })).body;
-  assert.deepEqual(back, { jsRewrite: true, mediaLog: false, youtubeEmbed: true, assetLog: false, clientOff: [] });
+  assert.deepEqual(back, { jsRewrite: true, mediaLog: false, youtubeEmbed: true, youtubeHideDrm: true, assetLog: false, clientOff: [] });
   const js2 = await (await fetch(url + P(siteUrl + "/a.js"), { headers: { "sec-fetch-dest": "script", "sec-fetch-site": "same-origin" } })).text();
   assert.equal(js2, "window.x = __kite$location.href;");
   const st = (await dev("GET", "/__kite/devtools/status")).body;

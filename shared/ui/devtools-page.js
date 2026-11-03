@@ -268,6 +268,7 @@ export function renderDevtools(root, ctx) {
         section("Backend",
           toggle("Rewrite sites' scripts", "Kite renames location, top… inside scripts so pages see their real address. Off = KITE_JS_REWRITE=0.", s.jsRewrite, (v) => save({ jsRewrite: v })),
           toggle("Video log", "Log every YouTube video chunk ([video] lines). Same as KITE_MEDIA_LOG=1.", s.mediaLog, (v) => save({ mediaLog: v })),
+          toggle("YouTube: hide protected-video (DRM) support inside Kite Web", "YouTube's full page checks for DRM as it starts; on Edge that reaches PlayReady's hardware video path, a suspect for the crash inside frames. Ordinary videos don't need it. Off = KITE_YOUTUBE_DRM=1.", s.youtubeHideDrm !== false, (v) => save({ youtubeHideDrm: v })),
           toggle("Asset log", "Log every file a page loads: [asset] lines for what the backend served, [page asset] lines for what the browser did with them (cache, failures, timing, video player events). Busy: switch it on, reload the tab, look. Same as KITE_ASSET_LOG=1.", Boolean(s.assetLog), (v) => save({ assetLog: v })),
           toggle("YouTube: play videos with YouTube's embedded player", "Kite's video page instead of the full watch page, which can crash inside Kite Web or stop after a minute. Off = KITE_YOUTUBE_EMBED=0.", s.youtubeEmbed !== false, (v) => save({ youtubeEmbed: v }))),
         section("Kite's page script (ticked = on)",

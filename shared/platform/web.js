@@ -113,15 +113,7 @@ const platform = {
       }
       const id = idOfWindow(e.source);
       if (id === null) return;
-      // A tab's page asks to be opened on its own (Kite's YouTube video page:
-      // the full YouTube page crashes Edge inside a frame).
-      if (d.type === "popout") {
-        try {
-          const u = new URL(String(d.url));
-          if (u.protocol === "http:" || u.protocol === "https:") platform.popout(id, u.href);
-        } catch {}
-        return;
-      }
+
       if (d.type === "find") return events.find(id, Number(d.active) || 0, Number(d.total) || 0);
       if (d.type === "zoom") return events.zoom(id, Math.round(Number(d.percent) || 100));
       if (d.type !== "page") return;

@@ -296,11 +296,14 @@ youtube.com and stop videos after about a minute. So Kite Web plays YouTube
 videos (`watch?v=`, `/shorts/`, `/live/`, `youtu.be` links) on **its own video
 page with YouTube's embedded player**, the one other websites use: it's made to
 run inside frames and plays most videos without BotGuard's token. The tab still
-shows the watch address; "Open the full YouTube page" opens the real one
-(comments, related videos) **in its own browser tab**: inside Kite Web's frame
-Edge crashes it a few seconds into playback (a browser bug Kite can't fix from a
-page), while on its own it plays. Kite also skips YouTube's reload-to-switch-theme
-(`&themeRefresh=1`), which crashed it too. Clicking a video on YouTube's own pages opens it this
+shows the watch address; "Open the full YouTube page" shows the real one
+(comments, related videos) in the tab. Inside Kite Web's frame Edge has crashed
+the full page, so Kite also: skips YouTube's reload-to-switch-theme
+(`&themeRefresh=1`), stops video players before a page is left, and tells
+YouTube protected video (DRM) isn't available inside the frame (it checks as it
+starts; on Edge that reaches PlayReady's hardware path). Each of these is logged
+(`[page navigate] skipped …`, `stopped … before leaving`, `[page media] asked for
+protected video …`), and DRM can be allowed again in Kite DevTools → Switches. Clicking a video on YouTube's own pages opens it this
 way too. Switch it off in Kite DevTools → Switches, or `KITE_YOUTUBE_EMBED=0`.
 A few videos can't be embedded (their owners turned that off): those say so. Some sign-in pages (notably Google's) refuse to work
 inside any proxy. The **Kite app** has none of these limits: its tabs are real

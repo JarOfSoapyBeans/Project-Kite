@@ -331,7 +331,7 @@ export function rewriteHtml(html, pageUrl, { allowedOrigins = [], scriptCookies 
   const inject =
     `<script data-kite>(${kiteClient.toString()})(${json(pageUrl)},${json(allowedOrigins)},${json(scriptCookies)},` +
     `${rewriteSettings.on ? kiteRenamer.toString() : "null"},${json(assetLog.on ? { ...pageScriptOff, _assets: true } : pageScriptOff)});</script>` +
-    (isYouTubePage(pageUrl) ? youtubeNavScript(youtubeSettings.embed) : "");
+    (isYouTubePage(pageUrl) ? youtubeNavScript(youtubeSettings.embed, youtubeSettings.hideDrm) : "");
   const head = /<head\b[^>]*>/i.exec(out);
   const at = head ? head.index + head[0].length : /^\s*(?:<!doctype[^>]*>)?/i.exec(out)[0].length;
   return out.slice(0, at) + inject + out.slice(at);
@@ -1264,6 +1264,8 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer, off) {
       postLog(kind, text);
     } catch (e) {}
   }
+  // For Kite's own site scripts (youtube.js): the backend's log, by the real path.
+  try { Object.defineProperty(window, "__kite$log", { value: function (kind, text) { postLog(String(kind), String(text).slice(0, 2000)); } }); } catch (e) {}
   function postLog(kind, text) {
     try {
       var body = JSON.stringify({ kind: kind, page: current, text: text });

@@ -95,7 +95,7 @@ function printPageLog(body) {
     const u = new URL(m.page);
     page = u.host + u.pathname + u.search;
   } catch {}
-  const label = { navigate: "page navigate", crash: "PAGE CRASH", intervention: "page blocked" }[m.kind] || "page error";
+  const label = { navigate: "page navigate", crash: "PAGE CRASH", intervention: "page blocked", media: "page media" }[m.kind] || "page error";
   const lines = clean(m.text, 2000).split("\n").map((l) => l.trim()).filter(Boolean);
   console.log(`[${label}] ${clean(page, 120)}: ${lines[0] || ""}` + lines.slice(1, 8).map((l) => "\n      " + l).join(""));
 }

@@ -15,7 +15,14 @@
 // Switch it off in Kite DevTools -> Switches, or with KITE_YOUTUBE_EMBED=0.
 // Only Kite Web: the Kite app's tabs are real browser pages.
 
-export const youtubeSettings = { embed: typeof process === "undefined" || process.env.KITE_YOUTUBE_EMBED !== "0" };
+export const youtubeSettings = {
+  embed: typeof process === "undefined" || process.env.KITE_YOUTUBE_EMBED !== "0",
+  // Inside Kite Web's frame, tell YouTube protected video (DRM: Widevine,
+  // PlayReady) isn't available. YouTube's full page checks for it as it starts;
+  // on Edge that reaches PlayReady's hardware video path, a suspect for the crash
+  // inside frames. Ordinary videos don't use DRM. KITE_YOUTUBE_DRM=1 allows it.
+  hideDrm: typeof process === "undefined" || process.env.KITE_YOUTUBE_DRM !== "1",
+};
 
 export const FULL_PAGE_PARAM = "kite_full"; // ...watch?v=ID&kite_full=1: the real watch page
 
@@ -116,7 +123,7 @@ export function videoPage(video, info = {}) {
   <h1>${esc(title)}</h1>
   <div class="row">
     ${info.channel ? (info.channelUrl ? `<a class="channel" href="${esc(info.channelUrl)}">${esc(info.channel)}</a>` : `<span class="channel">${esc(info.channel)}</span>`) : ""}
-    <a href="${esc(full.href)}" data-kite-popout="${esc(full.href)}" title="Opens in its own browser tab: inside Kite Web's frame the full page can crash Edge">Open the full YouTube page</a>
+    <a href="${esc(full.href)}">Open the full YouTube page</a>
     <a href="https://www.youtube.com/">YouTube home</a>
   </div>
   ${note ? `<p class="note warn">${esc(note)}</p>` : ""}
@@ -129,11 +136,12 @@ export function videoPage(video, info = {}) {
 // watch page after all. A video address pushed that way becomes a real page
 // load, which Kite answers with its video page. Runs after Kite's page script.
 // redirect: also turn video changes into Kite's video page (the embedded-player switch).
-export function youtubeNavScript(redirect = true) {
+// hideDrm: inside a frame, answer YouTube's DRM checks with "not available".
+export function youtubeNavScript(redirect = true, hideDrm = true) {
   return `<script data-kite>(function () {
   var fake = window.__kite$fakeLocation;
   if (!fake || window.__kite$skipNavigation) return;
-  // Only inside Kite Web's frame: a popped-out page (its own browser tab) plays the full page fine.
+  // Only inside Kite Web's frame (a page shown on its own needs none of this).
   var redirect = ${redirect ? "true" : "false"} && window.top !== window;
   function video(u) {
     try {
@@ -181,15 +189,22 @@ export function youtubeNavScript(redirect = true) {
       return a.searchParams.toString() === b.searchParams.toString() ? "YouTube reloading only to change light/dark theme" : null;
     } catch (e) { return null; }
   } });
-  // "Open the full YouTube page" on Kite's video page: the full page crashes Edge
-  // inside a frame, so Kite Web opens it in its own browser tab (pop-out).
-  document.addEventListener("click", function (e) {
-    var a = e.target && e.target.closest ? e.target.closest("a[data-kite-popout]") : null;
-    if (!a || window.top === window) return;
-    e.preventDefault();
-    e.stopImmediatePropagation();
-    window.top.postMessage({ kite: 1, type: "popout", url: a.getAttribute("data-kite-popout") }, "*");
-  }, true);
+  // Protected video (DRM) checks: logged, and inside Kite Web's frame answered
+  // "not available" (see youtubeSettings.hideDrm).
+  var noDrm = ${hideDrm ? "true" : "false"} && window.top !== window, drmSeen = {};
+  function tell(text) {
+    try { if (window.__kite$log) window.__kite$log("media", text); } catch (e) {}
+  }
+  var askDrm = navigator.requestMediaKeySystemAccess;
+  if (askDrm) navigator.requestMediaKeySystemAccess = function (keySystem) {
+    var ks = String(keySystem);
+    if (!drmSeen[ks]) {
+      drmSeen[ks] = 1;
+      tell("asked for protected video (DRM) " + ks + (noDrm ? ": Kite answered not available" : ": allowed"));
+    }
+    if (noDrm) return Promise.reject(new DOMException("Unsupported keySystem or supportedConfigurations.", "NotSupportedError"));
+    return askDrm.apply(navigator, arguments);
+  };
   // YouTube announces its own page changes: a second net.
   document.addEventListener("yt-navigate-start", function (e) {
     var u = e && e.detail && (e.detail.url || (e.detail.endpoint && e.detail.endpoint.commandMetadata && e.detail.endpoint.commandMetadata.webCommandMetadata && e.detail.endpoint.commandMetadata.webCommandMetadata.url));

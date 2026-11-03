@@ -113,6 +113,7 @@ export function getSettings() {
     jsRewrite: rewriteSettings.on,
     mediaLog: mediaLog.on,
     youtubeEmbed: youtubeSettings.embed,
+    youtubeHideDrm: youtubeSettings.hideDrm,
     assetLog: assetLog.on,
     clientOff: Object.keys(pageScriptOff).filter((k) => pageScriptOff[k]),
   };
@@ -122,13 +123,14 @@ export function setSettings(changes = {}) {
   if (typeof changes.jsRewrite === "boolean") rewriteSettings.on = changes.jsRewrite;
   if (typeof changes.mediaLog === "boolean") mediaLog.on = changes.mediaLog;
   if (typeof changes.youtubeEmbed === "boolean") youtubeSettings.embed = changes.youtubeEmbed;
+  if (typeof changes.youtubeHideDrm === "boolean") youtubeSettings.hideDrm = changes.youtubeHideDrm;
   if (typeof changes.assetLog === "boolean") assetLog.on = changes.assetLog;
   if (Array.isArray(changes.clientOff)) {
     for (const k of Object.keys(pageScriptOff)) delete pageScriptOff[k];
     for (const k of changes.clientOff) if (CLIENT_PARTS[k]) pageScriptOff[k] = true;
   }
   const now = getSettings();
-  console.log(`[devtools] settings: script rewriting ${now.jsRewrite ? "on" : "OFF"}, video log ${now.mediaLog ? "on" : "off"}, YouTube embedded player ${now.youtubeEmbed ? "on" : "off"}, asset log ${now.assetLog ? "on" : "off"}` +
+  console.log(`[devtools] settings: script rewriting ${now.jsRewrite ? "on" : "OFF"}, video log ${now.mediaLog ? "on" : "off"}, YouTube embedded player ${now.youtubeEmbed ? "on" : "off"}, YouTube DRM ${now.youtubeHideDrm ? "hidden" : "allowed"}, asset log ${now.assetLog ? "on" : "off"}` +
     (now.clientOff.length ? `, page-script parts OFF: ${now.clientOff.join(", ")}` : ""));
   return now;
 }
