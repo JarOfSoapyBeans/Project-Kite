@@ -130,20 +130,33 @@ export function videoPage(video, info = {}) {
 // load, which Kite answers with its video page. Runs after Kite's page script.
 export function youtubeNavScript() {
   return `<script data-kite>(function () {
-  var H = History.prototype, push = H.pushState, fake = window.__kite$fakeLocation;
-  if (!fake || H.__kiteYouTube) return;
+  var fake = window.__kite$fakeLocation;
+  if (!fake || window.__kite$videoNav) return;
   function video(u) {
     try {
       var x = new URL(u, fake.href);
       return /(^|\\.)youtube\\.com$/.test(x.hostname) && (x.pathname === "/watch" || /^\\/(shorts|live)\\//.test(x.pathname)) && x.searchParams.get("${FULL_PAGE_PARAM}") !== "1" ? x.href : null;
     } catch (e) { return null; }
   }
-  H.pushState = function (state, title, url) {
-    var to = url != null ? video(String(url)) : null;
-    if (to) { fake.assign(to); return; }
-    return push.apply(this, arguments);
-  };
-  Object.defineProperty(H, "__kiteYouTube", { value: true });
+  function onVideoPage() { return !!document.querySelector('meta[name="kite-video"]'); }
+  var going = false;
+  function go(to) { if (!going) { going = true; fake.assign(to); } return true; }
+  // Called by Kite's history patch (every frame's pushState/replaceState) with
+  // the real address: true = Kite took care of it.
+  Object.defineProperty(window, "__kite$videoNav", { value: function (href, how) {
+    if (onVideoPage()) return false;
+    var to = video(href);
+    if (!to) return false;
+    var now = video(fake.href);
+    if (how === "replaceState" && now && now.split("#")[0] === to.split("#")[0]) return false; // same video, e.g. &t= added
+    return go(to);
+  } });
+  // YouTube announces its own page changes: a second net.
+  document.addEventListener("yt-navigate-start", function (e) {
+    var u = e && e.detail && (e.detail.url || (e.detail.endpoint && e.detail.endpoint.commandMetadata && e.detail.endpoint.commandMetadata.webCommandMetadata && e.detail.endpoint.commandMetadata.webCommandMetadata.url));
+    var to = u && !onVideoPage() ? video(u) : null;
+    if (to) go(to);
+  }, true);
 })();</script>`;
 }
 

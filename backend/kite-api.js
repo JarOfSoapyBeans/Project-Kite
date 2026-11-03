@@ -115,7 +115,7 @@ function printAssets(m) {
 
 // Reports the browser sends by itself (Reporting API). Only the ones that explain
 // a broken page are printed: a crashed tab and features the browser blocked.
-function printReports(body) {
+function printReports(body, from = null) {
   let list;
   try {
     list = JSON.parse(body);
@@ -132,8 +132,12 @@ function printReports(body) {
       page = real.host + real.pathname + (u.search || real.search);
     } catch {}
     const b = r.body || {};
+    // Everything the browser said: reason ("oom" = out of memory, "unresponsive"
+    // = hung; nothing = some other crash), whether it was a frame, visible or not.
+    const extra = Object.entries(b).filter(([k]) => !["reason", "is_top_level", "stack"].includes(k)).map(([k, v]) => `${k}=${clean(JSON.stringify(v), 80)}`);
     const text = r.type === "crash"
-      ? `the page crashed (reason: ${b.reason || "unknown"}${b.is_top_level === false ? ", in a frame" : ""})` +
+      ? `the page crashed (reason: ${b.reason || "not given (not out of memory, not a hang)"}${b.is_top_level === false ? ", in a frame" : b.is_top_level === true ? ", the whole tab" : ""}` +
+        `${from === "kite-video-page" ? ", Kite's video page" : ""}${extra.length ? "; " + extra.join(", ") : ""})` +
         (b.stack ? "\n" + b.stack : "")
       : `${b.message || b.id || "intervention"}${b.sourceFile ? ` (${b.sourceFile}:${b.lineNumber}:${b.columnNumber})` : ""}`;
     printPageLog(JSON.stringify({ kind: r.type, page: "https://" + page, text }));
@@ -244,7 +248,7 @@ export async function handleKiteApi(req, res, { sessions, allowedOrigins = [], c
     if (req.method === "OPTIONS") return send(res, 204), true;
     if (req.method !== "POST") return send(res, 405), true;
     const body = await readBody(req, 65536);
-    if (body) printReports(body);
+    if (body) printReports(body, new URL(req.url, "http://localhost").searchParams.get("from"));
     return send(res, 204), true;
   }
 

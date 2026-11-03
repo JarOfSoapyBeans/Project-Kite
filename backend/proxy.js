@@ -1134,6 +1134,9 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer, off) {
           if (url !== undefined && url !== null && url !== "") {
             var real = null;
             try { real = realOf(url); } catch (e) {}
+            // Kite Web on YouTube: a video opened in-page becomes a page load of
+            // Kite's video page (youtube.js), whichever frame's copy is called.
+            if (real && typeof window.__kite$videoNav === "function" && window.__kite$videoNav(real.href, name)) return;
             if (real) {
               current = real.href;
               url = proxyPath(real);
@@ -1706,6 +1709,7 @@ function decodeText(buf, contentType, isHtml) {
   }
 }
 
+// Kite's video page (youtube.js). Its crashes are reported as its own.
 async function sendVideoPage(req, res, video, o) {
   const info = await videoInfo(video.id);
   // The tab shows the video's watch address (youtu.be/ID becomes watch?v=ID).
@@ -1714,7 +1718,7 @@ async function sendVideoPage(req, res, video, o) {
     : video.url;
   const html = rewriteHtml(videoPage(video, info), pageUrl, { allowedOrigins: o.allowedOrigins, scriptCookies: o.jar ? o.jar.scriptCookies(pageUrl) : "" });
   let body = Buffer.from(html, "utf8");
-  const headers = { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache, no-transform", "x-kite-source": "kite" };
+  const headers = { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache, no-transform", "x-kite-source": "kite", "reporting-endpoints": 'default="/__kite/report?from=kite-video-page"' };
   const encoding = await compressFor(req, body);
   if (encoding) {
     body = encoding.body;
