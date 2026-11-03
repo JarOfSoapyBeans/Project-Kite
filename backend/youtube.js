@@ -140,7 +140,14 @@ export function youtubeNavScript() {
   }
   function onVideoPage() { return !!document.querySelector('meta[name="kite-video"]'); }
   var going = false;
-  function go(to) { if (!going) { going = true; fake.assign(to); } return true; }
+  // Stop the page's players first (see stopMedia in Kite's page script), then go.
+  function go(to) {
+    if (going) return true;
+    going = true;
+    if (window.__kite$stopMedia) window.__kite$stopMedia("opening a video");
+    setTimeout(function () { fake.assign(to); }, 60);
+    return true;
+  }
   function idOf(u) {
     try {
       var x = new URL(u, fake.href);

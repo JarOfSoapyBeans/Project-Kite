@@ -1282,6 +1282,30 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer, off) {
   });
 
 
+  // ---------- leaving a page with video or audio playing ----------
+  // Edge (and sometimes Chrome) can crash a page shown in a frame when it's torn
+  // down while its video player is streaming (YouTube's MediaSource player):
+  // every crash report said the page was being hidden, i.e. left. So players are
+  // stopped just before the page goes, while it's still alive.
+  function stopMedia(why) {
+    var n = 0;
+    try {
+      var list = document.querySelectorAll("video, audio");
+      for (var i = 0; i < list.length; i++) {
+        var m = list[i];
+        if (!m.currentSrc && !m.src && !m.srcObject) continue;
+        n++;
+        try { m.pause(); } catch (e) {}
+        try { m.srcObject = null; } catch (e) {}
+        try { m.removeAttribute("src"); m.load(); } catch (e) {}
+      }
+    } catch (e) {}
+    if (n) kiteLog("navigate", "stopped " + n + " video/audio player" + (n === 1 ? "" : "s") + " before leaving (" + why + ")");
+    return n;
+  }
+  try { Object.defineProperty(window, "__kite$stopMedia", { value: stopMedia }); } catch (e) {}
+  window.addEventListener("beforeunload", function () { stopMedia("page unloading"); }, true);
+
   // ---------- asset log (Kite DevTools -> Switches -> Asset log) ----------
   // Every file the browser loaded for this page (or failed to), with its
   // timing, and what video and audio players do, sent to the backend's log in
