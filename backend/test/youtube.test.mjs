@@ -35,10 +35,10 @@ test("Kite's video page: the embedded player, title and channel as text, a way t
 
 test("youtube.com pages get the script that turns in-page video changes into page loads", () => {
   const html = "<html><head></head><body></body></html>";
-  assert.ok(rewriteHtml(html, "https://www.youtube.com/").includes("__kiteYouTube"));
-  assert.ok(!rewriteHtml(html, "https://example.com/").includes("__kiteYouTube"));
+  assert.ok(rewriteHtml(html, "https://www.youtube.com/").includes("__kite$videoNav"));
+  assert.ok(!rewriteHtml(html, "https://example.com/").includes("__kite$videoNav"));
   youtubeSettings.embed = false;
-  assert.ok(!rewriteHtml(html, "https://www.youtube.com/").includes("__kiteYouTube"));
+  assert.ok(!rewriteHtml(html, "https://www.youtube.com/").includes("__kite$videoNav"));
   youtubeSettings.embed = true;
   assert.ok(youtubeNavScript().includes("kite_full"));
 });
