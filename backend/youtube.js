@@ -116,7 +116,7 @@ export function videoPage(video, info = {}) {
   <h1>${esc(title)}</h1>
   <div class="row">
     ${info.channel ? (info.channelUrl ? `<a class="channel" href="${esc(info.channelUrl)}">${esc(info.channel)}</a>` : `<span class="channel">${esc(info.channel)}</span>`) : ""}
-    <a href="${esc(full.href)}">Open the full YouTube page</a>
+    <a href="${esc(full.href)}" data-kite-popout="${esc(full.href)}" title="Opens in its own browser tab: inside Kite Web's frame the full page can crash Edge">Open the full YouTube page</a>
     <a href="https://www.youtube.com/">YouTube home</a>
   </div>
   ${note ? `<p class="note warn">${esc(note)}</p>` : ""}
@@ -133,7 +133,8 @@ export function youtubeNavScript(redirect = true) {
   return `<script data-kite>(function () {
   var fake = window.__kite$fakeLocation;
   if (!fake || window.__kite$skipNavigation) return;
-  var redirect = ${redirect ? "true" : "false"};
+  // Only inside Kite Web's frame: a popped-out page (its own browser tab) plays the full page fine.
+  var redirect = ${redirect ? "true" : "false"} && window.top !== window;
   function video(u) {
     try {
       var x = new URL(u, fake.href);
@@ -180,6 +181,15 @@ export function youtubeNavScript(redirect = true) {
       return a.searchParams.toString() === b.searchParams.toString() ? "YouTube reloading only to change light/dark theme" : null;
     } catch (e) { return null; }
   } });
+  // "Open the full YouTube page" on Kite's video page: the full page crashes Edge
+  // inside a frame, so Kite Web opens it in its own browser tab (pop-out).
+  document.addEventListener("click", function (e) {
+    var a = e.target && e.target.closest ? e.target.closest("a[data-kite-popout]") : null;
+    if (!a || window.top === window) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    window.top.postMessage({ kite: 1, type: "popout", url: a.getAttribute("data-kite-popout") }, "*");
+  }, true);
   // YouTube announces its own page changes: a second net.
   document.addEventListener("yt-navigate-start", function (e) {
     var u = e && e.detail && (e.detail.url || (e.detail.endpoint && e.detail.endpoint.commandMetadata && e.detail.endpoint.commandMetadata.webCommandMetadata && e.detail.endpoint.commandMetadata.webCommandMetadata.url));

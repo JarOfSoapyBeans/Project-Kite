@@ -113,6 +113,15 @@ const platform = {
       }
       const id = idOfWindow(e.source);
       if (id === null) return;
+      // A tab's page asks to be opened on its own (Kite's YouTube video page:
+      // the full YouTube page crashes Edge inside a frame).
+      if (d.type === "popout") {
+        try {
+          const u = new URL(String(d.url));
+          if (u.protocol === "http:" || u.protocol === "https:") platform.popout(id, u.href);
+        } catch {}
+        return;
+      }
       if (d.type === "find") return events.find(id, Number(d.active) || 0, Number(d.total) || 0);
       if (d.type === "zoom") return events.zoom(id, Math.round(Number(d.percent) || 100));
       if (d.type !== "page") return;
@@ -265,8 +274,14 @@ const platform = {
   // Kite). There, a crashed page shows the browser's own error page and code.
   popout(id, url) {
     const win = window.open("about:blank", "_blank");
+    if (!win) {
+      // Pop-ups blocked: show it in the tab after all.
+      events.status("Your browser blocked the new tab. Allow pop-ups for Kite to open pages on their own.");
+      if (id !== null && id !== undefined) platform.navigate(id, url);
+      return;
+    }
     getTicket().then((t) => {
-      if (win) win.location.href = proxied(url, t);
+      win.location.href = proxied(url, t);
     });
   },
 };
