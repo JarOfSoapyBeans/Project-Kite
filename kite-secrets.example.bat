@@ -15,6 +15,8 @@ rem For finding a crash: switch parts of Kite's in-page script off (comma-separa
 rem   native, parent, frames, address, function, dom, elements, navigation,
 rem   history, cookies, reflect, diagnostics
 rem set KITE_CLIENT_OFF=frames,parent
+rem Log every file pages load (also switchable in Kite DevTools -> Switches):
+rem set KITE_ASSET_LOG=1
 rem Kite Web plays YouTube videos with YouTube's embedded player (0 = the full watch page):
 rem set KITE_YOUTUBE_EMBED=0
 rem And Kite's rewriting of sites' scripts (0 = off):

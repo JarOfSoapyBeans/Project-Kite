@@ -28,7 +28,7 @@ before(async () => {
   url = `http://127.0.0.1:${k.server.address().port}`;
 });
 after(() => {
-  setSettings({ jsRewrite: true, mediaLog: false, clientOff: [] });
+  setSettings({ jsRewrite: true, mediaLog: false, assetLog: false, clientOff: [] });
   k.server.closeAllConnections();
   k.server.close();
   site.close();
@@ -78,13 +78,13 @@ test("live switches: page-script parts, script rewriting, video log", async () =
   const dev = browser();
   await dev("POST", "/__kite/account/signin", { username: "dev", password: "password123" });
   const s = (await dev("POST", "/__kite/devtools/settings", { clientOff: ["parent", "nonsense"], jsRewrite: false, mediaLog: true })).body;
-  assert.deepEqual(s, { jsRewrite: false, mediaLog: true, youtubeEmbed: true, clientOff: ["parent"] });
+  assert.deepEqual(s, { jsRewrite: false, mediaLog: true, youtubeEmbed: true, assetLog: false, clientOff: ["parent"] });
   const page = await (await fetch(url + P(siteUrl + "/"), { headers: { "sec-fetch-site": "same-origin" } })).text();
   assert.ok(page.includes(',null,{"parent":true});</script>'), "the page script gets the switches, no renamer");
   const js = await (await fetch(url + P(siteUrl + "/a.js"), { headers: { "sec-fetch-dest": "script", "sec-fetch-site": "same-origin" } })).text();
   assert.equal(js, "window.x = location.href;", "scripts no longer rewritten");
   const back = (await dev("POST", "/__kite/devtools/settings", { clientOff: [], jsRewrite: true, mediaLog: false })).body;
-  assert.deepEqual(back, { jsRewrite: true, mediaLog: false, youtubeEmbed: true, clientOff: [] });
+  assert.deepEqual(back, { jsRewrite: true, mediaLog: false, youtubeEmbed: true, assetLog: false, clientOff: [] });
   const js2 = await (await fetch(url + P(siteUrl + "/a.js"), { headers: { "sec-fetch-dest": "script", "sec-fetch-site": "same-origin" } })).text();
   assert.equal(js2, "window.x = __kite$location.href;");
   const st = (await dev("GET", "/__kite/devtools/status")).body;
@@ -100,4 +100,30 @@ test("the log captures what the backend prints", async () => {
   console.log("[kite 404] /s/player/base.js");
   console.log = original;
   assert.ok(h.events.some((e) => e.type === "log" && e.text === "[kite 404] /s/player/base.js"));
+});
+
+test("asset log: a line per file served, and pages are told to report theirs", async () => {
+  const dev = browser();
+  await dev("POST", "/__kite/account/signin", { username: "dev", password: "password123" });
+  assert.equal((await dev("POST", "/__kite/devtools/settings", { assetLog: true })).body.assetLog, true);
+  const printed = [];
+  const original = console.log;
+  console.log = (...a) => printed.push(a.join(" "));
+  try {
+    const page = await (await fetch(url + P(siteUrl + "/a.js"), { headers: { "sec-fetch-dest": "script", "sec-fetch-site": "same-origin" } })).text();
+    void page;
+    const html = await (await fetch(url + P(siteUrl + "/"), { headers: { "sec-fetch-site": "same-origin" } })).text();
+    assert.ok(html.includes('"_assets":true'), "the page script reports the browser's side");
+    await new Promise((r) => setTimeout(r, 50));
+    // A page's report.
+    await fetch(url + "/__kite/log", { method: "POST", headers: { "sec-fetch-site": "same-origin" }, body: JSON.stringify({ kind: "assets", page: siteUrl + "/", text: "404 img  0 B  12 ms  https://x.test/a.png\nmedia waiting  video at 61.2 s" }) });
+  } finally {
+    console.log = original;
+    await dev("POST", "/__kite/devtools/settings", { assetLog: false });
+  }
+  assert.ok(printed.some((l) => /^\[asset 200\] script  \d+ B  \d+ ms  http:\/\/127\.0\.0\.1:\d+\/a\.js$/.test(l)), printed.join("\n"));
+  assert.ok(printed.some((l) => l.startsWith("[page asset] 404 img  0 B  12 ms  https://x.test/a.png   (on 127.0.0.1")), printed.join("\n"));
+  assert.ok(printed.some((l) => l.startsWith("[page asset] media waiting  video at 61.2 s")));
+  const quiet = await (await fetch(url + P(siteUrl + "/"), { headers: { "sec-fetch-site": "same-origin" } })).text();
+  assert.ok(!quiet.includes('"_assets":true'), "off: pages don't report");
 });

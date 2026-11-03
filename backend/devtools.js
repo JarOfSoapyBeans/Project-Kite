@@ -11,7 +11,7 @@
 // No dependencies.
 
 import { rewriteSettings, cacheStats } from "./jsrewrite.js";
-import { pageScriptOff, CLIENT_PARTS, mediaLog, compressedStats } from "./proxy.js";
+import { pageScriptOff, CLIENT_PARTS, mediaLog, assetLog, compressedStats } from "./proxy.js";
 import { youtubeSettings } from "./youtube.js";
 
 const MAX_EVENTS = 3000;
@@ -79,6 +79,7 @@ export function recordRequest(req, res, { realUrl, target = hub } = {}) {
   const finish = (aborted) => {
     if (done) return;
     done = true;
+    if (assetLog.on) printAsset(req, res, realUrl, bytes, Date.now() - started, aborted);
     target.add("request", {
       method: req.method,
       url: String(realUrl || req.url).slice(0, 2000),
@@ -95,6 +96,16 @@ export function recordRequest(req, res, { realUrl, target = hub } = {}) {
   res.on("close", () => finish(!res.writableFinished));
 }
 
+// The backend's side of the asset log: one line per file it served.
+function fmtBytes(n) {
+  return n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? (n / 1024).toFixed(1) + " kB" : n + " B";
+}
+function printAsset(req, res, realUrl, bytes, ms, aborted) {
+  const kind = req.headers["sec-fetch-dest"] || String(res.getHeader("content-type") || "").split(";")[0] || "?";
+  const from = res.getHeader("x-kite-source") === "upstream" ? "" : "  (answered by Kite)";
+  console.log(`[asset ${aborted ? "cancelled" : res.statusCode}] ${kind}  ${fmtBytes(bytes)}  ${ms} ms  ${String(realUrl || req.url).slice(0, 600)}${from}`);
+}
+
 // ---------- live switches ----------
 
 export function getSettings() {
@@ -102,6 +113,7 @@ export function getSettings() {
     jsRewrite: rewriteSettings.on,
     mediaLog: mediaLog.on,
     youtubeEmbed: youtubeSettings.embed,
+    assetLog: assetLog.on,
     clientOff: Object.keys(pageScriptOff).filter((k) => pageScriptOff[k]),
   };
 }
@@ -110,12 +122,13 @@ export function setSettings(changes = {}) {
   if (typeof changes.jsRewrite === "boolean") rewriteSettings.on = changes.jsRewrite;
   if (typeof changes.mediaLog === "boolean") mediaLog.on = changes.mediaLog;
   if (typeof changes.youtubeEmbed === "boolean") youtubeSettings.embed = changes.youtubeEmbed;
+  if (typeof changes.assetLog === "boolean") assetLog.on = changes.assetLog;
   if (Array.isArray(changes.clientOff)) {
     for (const k of Object.keys(pageScriptOff)) delete pageScriptOff[k];
     for (const k of changes.clientOff) if (CLIENT_PARTS[k]) pageScriptOff[k] = true;
   }
   const now = getSettings();
-  console.log(`[devtools] settings: script rewriting ${now.jsRewrite ? "on" : "OFF"}, video log ${now.mediaLog ? "on" : "off"}, YouTube embedded player ${now.youtubeEmbed ? "on" : "off"}` +
+  console.log(`[devtools] settings: script rewriting ${now.jsRewrite ? "on" : "OFF"}, video log ${now.mediaLog ? "on" : "off"}, YouTube embedded player ${now.youtubeEmbed ? "on" : "off"}, asset log ${now.assetLog ? "on" : "off"}` +
     (now.clientOff.length ? `, page-script parts OFF: ${now.clientOff.join(", ")}` : ""));
   return now;
 }

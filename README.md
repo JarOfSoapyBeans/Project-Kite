@@ -306,6 +306,15 @@ browser pages. For finding problems: `KITE_MEDIA_LOG=1` (video requests),
 `frame-test.html` (a site in a plain frame); see `kite-secrets.example.bat`.
 These switches can also be flipped live, without restarting, in Kite DevTools.
 
+**Asset log** (Kite DevTools → Switches, or `KITE_ASSET_LOG=1`): every file a
+page loads, in the backend window and Kite DevTools → Log. `[asset 200] script
+ 82.1 kB  140 ms  https://...` lines are what the backend served (status, kind,
+size, time, "answered by Kite" when Kite answered itself), and `[page asset]`
+lines are what the browser did with them: each file with its timing (or
+"browser cache"), files that FAILED to load, and video and audio players' events
+(`media waiting  video at 61.2 s, buffered to 63.0 s`, `media error … (media
+error 4: …)`). It's busy: switch it on, reload the tab you're looking at, then read.
+
 ### Kite DevTools
 
 `kite://devtools` (**Ctrl+Shift+K**, or Kite DevTools in the ⋮ menu) shows

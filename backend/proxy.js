@@ -330,7 +330,7 @@ export function rewriteHtml(html, pageUrl, { allowedOrigins = [], scriptCookies 
   const json = (v) => JSON.stringify(v).replace(/</g, "\\u003c");
   const inject =
     `<script data-kite>(${kiteClient.toString()})(${json(pageUrl)},${json(allowedOrigins)},${json(scriptCookies)},` +
-    `${rewriteSettings.on ? kiteRenamer.toString() : "null"},${json(pageScriptOff)});</script>` +
+    `${rewriteSettings.on ? kiteRenamer.toString() : "null"},${json(assetLog.on ? { ...pageScriptOff, _assets: true } : pageScriptOff)});</script>` +
     (youtubeSettings.embed && isYouTubePage(pageUrl) ? youtubeNavScript() : "");
   const head = /<head\b[^>]*>/i.exec(out);
   const at = head ? head.index + head[0].length : /^\s*(?:<!doctype[^>]*>)?/i.exec(out)[0].length;
@@ -1251,6 +1251,11 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer, off) {
       if (logSeen[kind + text] || logCount >= 40) return;
       logSeen[kind + text] = 1;
       logCount++;
+      postLog(kind, text);
+    } catch (e) {}
+  }
+  function postLog(kind, text) {
+    try {
       var body = JSON.stringify({ kind: kind, page: current, text: text });
       if (origBeacon) origBeacon.call(navigator, "/__kite/log", new Blob([body], { type: "text/plain" }));
       else origFetch.call(window, "/__kite/log", { method: "POST", body: body, keepalive: true });
@@ -1272,6 +1277,64 @@ function kiteClient(realUrl, origins, initialCookies, makeRenamer, off) {
     var r = e && e.reason;
     kiteLog("error", "unhandled promise rejection: " + (r && r.stack ? String(r.stack).split("\n").slice(0, 6).join("\n") : String(r)));
   });
+
+
+  // ---------- asset log (Kite DevTools -> Switches -> Asset log) ----------
+  // Every file the browser loaded for this page (or failed to), with its
+  // timing, and what video and audio players do, sent to the backend's log in
+  // batches. The backend logs its side of the same files (devtools.js).
+  if (off._assets) (function () {
+    var lines = [], sent = 0, timer = null;
+    function realOf(u) {
+      try {
+        var m = /\/proxy\/([A-Za-z0-9_-]{8,})/.exec(String(u));
+        var d = m && decode(m[1]);
+        if (d) return d.href;
+      } catch (e) {}
+      return String(u);
+    }
+    function size(n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? (n / 1024).toFixed(1) + " kB" : n + " B"; }
+    function flush() {
+      timer = null;
+      if (!lines.length) return;
+      var batch = lines.splice(0, 60);
+      sent += batch.length;
+      postLog("assets", batch.join("\n"));
+      if (lines.length) timer = setTimeout(flush, 400);
+    }
+    function add(line) {
+      if (sent + lines.length >= 800) return; // enough for one page
+      lines.push(String(line).slice(0, 700));
+      if (!timer) timer = setTimeout(flush, 1500);
+    }
+    try {
+      new PerformanceObserver(function (list) {
+        list.getEntries().forEach(function (e) {
+          if (/\/__kite\//.test(e.name)) return;
+          var how = e.transferSize === 0 && e.decodedBodySize > 0 ? "browser cache" : size(e.transferSize || e.encodedBodySize || 0);
+          add((e.responseStatus ? e.responseStatus + " " : "") + (e.initiatorType || "other") + "  " + how + "  " + Math.round(e.duration) + " ms  " + realOf(e.name));
+        });
+      }).observe({ type: "resource", buffered: true });
+    } catch (e) {}
+    // Images, scripts, stylesheets, frames... that didn't load.
+    window.addEventListener("error", function (e) {
+      var t = e && e.target;
+      if (!t || t === window || !t.tagName) return;
+      add("FAILED " + t.tagName.toLowerCase() + "  " + realOf(t.currentSrc || t.src || t.href || ""));
+    }, true);
+    // Video and audio players: what they're doing, and why they stop.
+    ["loadstart", "loadedmetadata", "playing", "waiting", "stalled", "pause", "ended", "emptied", "error"].forEach(function (ev) {
+      document.addEventListener(ev, function (e) {
+        var t = e.target;
+        if (!t || !/^(VIDEO|AUDIO)$/.test(t.tagName)) return;
+        var err = t.error ? " (media error " + t.error.code + (t.error.message ? ": " + t.error.message : "") + ")" : "";
+        var buffered = "";
+        try { if (t.buffered && t.buffered.length) buffered = ", buffered to " + t.buffered.end(t.buffered.length - 1).toFixed(1) + " s"; } catch (x) {}
+        add("media " + ev + "  " + t.tagName.toLowerCase() + " at " + (t.currentTime || 0).toFixed(1) + " s" + buffered + err);
+      }, true);
+    });
+    window.addEventListener("pagehide", flush);
+  })();
 
   // Reflect.get(window, "location") is the same lookup as window["location"].
   if (!off.reflect) ["get", "set"].forEach(function (name) {
@@ -1682,6 +1745,10 @@ function sendError(res, status, message) {
 //   [video] 403   0.0 MB  0.1s  itag=399 rn=31  pot=no
 // pot=no means YouTube's anti-bot check (BotGuard) gave the player no token;
 // YouTube then stops serving the video after about a minute (403).
+// The asset log (Kite DevTools -> Switches, or KITE_ASSET_LOG=1): one line per
+// file Kite serves (devtools.js recordRequest), and pages report what the
+// browser did with their files (the page script's asset log).
+export const assetLog = { on: typeof process !== "undefined" && process.env.KITE_ASSET_LOG === "1" };
 export const mediaLog = { on: typeof process !== "undefined" && process.env.KITE_MEDIA_LOG === "1" };
 export function logMedia(req, res, up, target, status) {
   let u;

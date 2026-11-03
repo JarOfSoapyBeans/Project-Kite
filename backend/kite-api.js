@@ -76,14 +76,19 @@ function clean(text, max) {
     .replace(/https?:\/\/\S{120,}/g, (u) => u.slice(0, 110) + "...")
     .slice(0, max);
 }
+// The asset log from pages: up to 600 lines a minute.
+let assetBudget = 600;
+setInterval(() => (assetBudget = 600), 60_000).unref();
+
 function printPageLog(body) {
-  if (!LOG_ON || logBudget <= 0) return;
   let m;
   try {
     m = JSON.parse(body);
   } catch {
     return;
   }
+  if (m && m.kind === "assets") return printAssets(m);
+  if (!LOG_ON || logBudget <= 0) return;
   logBudget--;
   let page = "";
   try {
@@ -93,6 +98,19 @@ function printPageLog(body) {
   const label = { navigate: "page navigate", crash: "PAGE CRASH", intervention: "page blocked" }[m.kind] || "page error";
   const lines = clean(m.text, 2000).split("\n").map((l) => l.trim()).filter(Boolean);
   console.log(`[${label}] ${clean(page, 120)}: ${lines[0] || ""}` + lines.slice(1, 8).map((l) => "\n      " + l).join(""));
+}
+
+function printAssets(m) {
+  let page = "";
+  try {
+    const u = new URL(m.page);
+    page = u.host + u.pathname;
+  } catch {}
+  for (const line of clean(m.text, 60 * 700).split("\n")) {
+    if (!line.trim() || assetBudget <= 0) continue;
+    assetBudget--;
+    console.log(`[page asset] ${clean(line, 700)}   (on ${clean(page, 80)})`);
+  }
 }
 
 // Reports the browser sends by itself (Reporting API). Only the ones that explain
