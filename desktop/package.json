@@ -1,19 +1,75 @@
 {
   "name": "kite-desktop",
   "productName": "Kite",
-  "version": "0.3.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Kite, the browser app: real Chromium tabs (Electron) with Kite's shared interface.",
   "main": "main.js",
   "scripts": {
     "build-ui": "node scripts/build-ui.mjs",
     "start": "node scripts/build-ui.mjs && electron .",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "dist": "node scripts/build-ui.mjs && electron-builder --win --publish never",
+    "release": "node scripts/build-ui.mjs && electron-builder --win --publish always"
   },
   "devDependencies": {
-    "electron": "latest"
+    "electron": "latest",
+    "electron-builder": "^26.0.12"
   },
   "kite": {
     "searchServer": "https://kite-api.cat-code.org"
+  },
+  "author": "JarOfSoapyBeans",
+  "homepage": "https://github.com/JarOfSoapyBeans/Project-Kite",
+  "dependencies": {
+    "electron-updater": "^6.6.2"
+  },
+  "build": {
+    "appId": "io.github.jarofsoapybeans.kite",
+    "productName": "Kite",
+    "copyright": "Kite",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "view-preload.js",
+      "lib/**",
+      "app-ui/**",
+      "build/icon.png",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "Kite-Setup-${version}.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Kite",
+      "uninstallDisplayName": "Kite",
+      "deleteAppDataOnUninstall": false
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "JarOfSoapyBeans",
+        "repo": "Project-Kite",
+        "releaseType": "release"
+      }
+    ]
   }
 }

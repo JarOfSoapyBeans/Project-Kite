@@ -1,6 +1,6 @@
 {
   "name": "kite",
-  "version": "0.3.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Kite: a browser app (desktop), with Kite Web, a web version that works like it.",
   "workspaces": [

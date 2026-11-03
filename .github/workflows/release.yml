@@ -1,0 +1,72 @@
+# A Kite release. Push a version tag that matches desktop/package.json:
+#     git tag v1.0.0
+#     git push origin v1.0.0
+# Then, on GitHub's machines: the tests run; Windows builds "Kite-Setup-1.0.0.exe"
+# and publishes it (with latest.yml, which installed apps read to update
+# themselves) as the GitHub Release v1.0.0; Kite Web's built site is added to
+# the same release as a zip.
+name: Release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - run: npm test
+
+  app:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build the app on its own (outside the npm workspace)
+        shell: bash
+        run: mv package.json package.workspace.json
+      - name: Install the app's parts
+        working-directory: desktop
+        run: npm install --no-audit --no-fund
+      - name: Build Kite Setup.exe and publish the release
+        working-directory: desktop
+        run: npm run release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Kite-Setup
+          path: desktop/dist/*.exe
+
+  web:
+    needs: app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build Kite Web
+        working-directory: frontend
+        run: node scripts/build.mjs
+        env:
+          BACKEND_URL: https://kite-api.cat-code.org
+      - name: Add it to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version=$(node -p "require('./desktop/package.json').version")
+          (cd frontend/dist && zip -qr "../../Kite-Web-${version}.zip" .)
+          gh release upload "v${version}" "Kite-Web-${version}.zip" --clobber

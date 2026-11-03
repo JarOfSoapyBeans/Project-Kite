@@ -1,0 +1,19 @@
+# Runs all of Kite's tests (shared, backend, app) on every push and pull request.
+name: Tests
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install
+        run: npm install --no-audit --no-fund
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1" # the app's tests use a stand-in for Electron
+      - name: Test
+        run: npm test

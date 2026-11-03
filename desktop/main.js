@@ -26,6 +26,7 @@ const { Downloads } = require("./lib/downloads.js");
 const { Sync } = require("./lib/sync.js");
 const { pageMenu, tabMenu, appMenu } = require("./lib/menus.js");
 const { DevtoolsLog, watchSession, consoleMessage } = require("./lib/devtools-log.js");
+const { Updates } = require("./lib/updates.js");
 
 const UI_DIR = path.join(__dirname, "app-ui");
 const UI_URL = "kite://app/index.html";
@@ -121,6 +122,7 @@ function shortcutFor(input) {
 
 let profiles = null; // Profiles (lib/profiles.js)
 let downloads = null; // Downloads (lib/downloads.js)
+let updates = null; // Updates (lib/updates.js): the installed app updating itself
 const permsByProfile = new Map(); // profile id -> SitePermissions
 const readySessions = new Set();
 const windows = new Set(); // KiteWindow
@@ -209,6 +211,7 @@ class KiteWindow {
       title: this.title(),
       backgroundColor: "#16181d",
       autoHideMenuBar: true,
+      icon: path.join(__dirname, "build", "icon.png"),
       webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, sandbox: true, nodeIntegration: false },
     }));
     windows.add(this);
@@ -684,6 +687,7 @@ function devtoolsStatus(kw) {
     tabs: mine.reduce((sum, w) => sum + w.views.size, 0),
     memory,
     sync: kw.profile.guest ? null : sync.status(kw.profile.id),
+    updates: updates ? updates.status() : null,
     downloads: downloads.list(kw.profile.id).length,
     events: devlog.events.filter((e) => e.profile === kw.profile.id).length,
   };
@@ -784,6 +788,7 @@ function wireIpc() {
     if (chosen === "guest-window") return new KiteWindow(profiles.guest()), null;
     if (chosen.startsWith("open-profile:")) return openProfile(chosen.slice(13)), null;
     if (chosen === "devtools") return kw.windowShortcut("devtools", kw.activeId), null;
+    if (chosen === "check-updates") return updates && updates.check(true), null;
     if (chosen === "exit") return app.quit(), null;
     return chosen;
   });
@@ -839,6 +844,14 @@ if (!app.requestSingleInstanceLock()) {
     Menu.setApplicationMenu(process.platform === "darwin" ? Menu.buildFromTemplate([{ role: "appMenu" }, { role: "editMenu" }]) : null);
     wireIpc();
     new KiteWindow(profiles.get("main"));
+    // The installed app keeps itself up to date (GitHub Releases).
+    updates = new Updates({
+      app,
+      dialog,
+      window: () => (BrowserWindow.getFocusedWindow && BrowserWindow.getFocusedWindow()) || ([...windows][0] && [...windows][0].win) || null,
+      log: (level, text) => { for (const p of profiles.list()) devlog.add(p.id, "log", { level, text }); },
+    });
+    updates.start();
     app.on("activate", () => !windows.size && new KiteWindow(profiles.get("main")));
   });
 

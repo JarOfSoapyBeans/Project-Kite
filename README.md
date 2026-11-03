@@ -1,5 +1,51 @@
 # Kite
 
+**[Download Kite for Windows](https://github.com/JarOfSoapyBeans/Project-Kite/releases/latest)**
+(`Kite-Setup-<version>.exe`, from Releases).
+
+Kite is a browser: a **desktop app** (real Chromium tabs, profiles, downloads,
+Kite DevTools and its own search engine, Kite Search), and **Kite Web**, a
+version that works like it inside any browser, through Kite's own proxy engine.
+Pick whichever you like.
+
+## Install Kite (Windows)
+
+1. Download `Kite-Setup-<version>.exe` from the
+   [latest release](https://github.com/JarOfSoapyBeans/Project-Kite/releases/latest)
+   and run it. Choose where to install it; it adds Kite to the Start menu and
+   the desktop.
+2. Windows may say "Windows protected your PC", because Kite isn't signed with
+   a paid code-signing certificate yet: click **More info → Run anyway**.
+
+**Updates are automatic**: the installed app checks GitHub Releases when it
+starts and every 4 hours, downloads a new version in the background and asks
+whether to restart now or later (later = it's installed the next time you close
+Kite). ⋮ → **Check for updates…** checks right away. Your profiles, history,
+bookmarks and settings are kept (in `%APPDATA%\Kite`). Uninstall from Windows
+Settings → Apps.
+
+**Kite Web** is on your own server (see below); each release also has
+`Kite-Web-<version>.zip`, the built site, to host anywhere (edit `config.js` in
+it to point at your Kite backend).
+
+## Making a release
+
+1. Change `"version"` in `desktop/package.json` (e.g. to `1.0.1`) and commit.
+2. Tag it and push the tag:
+   ```bash
+   git tag v1.0.1
+   git push origin main v1.0.1
+   ```
+3. GitHub Actions (`.github/workflows/release.yml`) runs the tests, builds
+   `Kite-Setup-1.0.1.exe` on Windows, publishes the release with it, and adds
+   `Kite-Web-1.0.1.zip`. Installed apps pick it up within 4 hours.
+
+Every push also runs all the tests (`.github/workflows/test.yml`). To build the
+installer on your own Windows PC instead: `cd desktop`, `npm install`, `npm run dist`
+(it lands in `desktop/dist/`).
+
+## Kite Web
+
 A browser in your browser. Kite has tabs, an address bar and search, and loads
 every site through its own proxy engine, written from scratch with no dependencies.
 
@@ -17,9 +63,9 @@ every site through its own proxy engine, written from scratch with no dependenci
 - `backend/` is a small Node server you host yourself (Codespaces, a VPS, a home
   server behind a Cloudflare Tunnel, Fly.io, Railway...).
 
-### Kite is becoming an app (Stage 7)
+### Kite is an app (Stage 7)
 
-Kite is mainly a **desktop browser app** (real Chromium, in progress), with
+Kite is mainly a **desktop browser app** (real Chromium), with
 **Kite Web**, the version above, that looks and works like it. Both use one
 interface:
 
@@ -103,7 +149,7 @@ The backend stores only a hash of each app's token.
 Kite Web also has **find in page** (Ctrl+F), **zoom** and **print** now (done by
 Kite's script inside the page), and a padlock showing the real site.
 
-Where the app keeps things: `%APPDATA%\kite-desktop` on Windows (profiles.json,
+Where the app keeps things: `%APPDATA%\Kite` on Windows (the installed app and `start_desktop.bat` share it) (profiles.json,
 permissions-*.json and the profiles' browser data).
 
 ## Try it in GitHub Codespaces
@@ -229,16 +275,16 @@ To update later: `git pull`, then restart `start_home.bat`. Your cookies stay in
 - [x] **Stage 6:** computed lookups (`window["loc" + "ation"]`) and `eval` are rewritten too,
   and Kite's replaced browser functions look like the browser's own
 - [x] Kite accounts (password or Sign in with Google), cookie import
-- [ ] **Stage 7:** Kite as a desktop app, with Kite Web working like it
+- [x] **Stage 7:** Kite as a desktop app, with Kite Web working like it
   - [x] Part 1: one shared interface (`shared/`) with a platform layer
   - [x] Part 2: the app (Electron): real Chromium tabs
   - [x] Part 3: profiles, permissions, downloads, find, zoom, print, menus
   - [x] Part 4: history, bookmarks, new tab page, settings (app and Kite Web)
   - [x] Part 5: data in your Kite account; app sync; find/zoom/print in Kite Web
-  - [ ] Part 6: the first full release
+  - [x] Part 6: the first full release (1.0.0)
     - [x] 6a: Kite DevTools (`kite://devtools`)
     - [x] 6b: Kite Search, Kite's own search engine (`backend/search/`)
-    - [ ] 6c: Windows installer, auto-update, GitHub Actions, release
+    - [x] 6c: Windows installer, automatic updates, GitHub Actions, release
 
 ### Known limits of Kite Web
 
